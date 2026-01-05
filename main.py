@@ -30,12 +30,6 @@ from datetime import datetime, timedelta
 import holidays
 import ctypes
 
-# [2] holidays.countries 에러 방지를 위한 강제 로드
-try:
-    from holidays.countries import Korea
-except ImportError:
-    pass
-
 # 윈도우 4K DPI 인식 설정
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
