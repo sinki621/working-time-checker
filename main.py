@@ -175,12 +175,12 @@ class OTCalculator(ctk.CTk):
         
         # 컬럼 정의 (이름, 헤더 텍스트, 너비)
         columns = [
-            ("Date", "날짜", 130),
-            ("Range", "근무시간", 150),
-            ("Rest", "휴게", 80),
-            ("Net", "실근무", 100),
-            ("Type", "근무유형", 180),
-            ("Total", "환산합계", 100)
+            ("Date", "날짜", 140),
+            ("Range", "근무시간", 160),
+            ("Rest", "휴게", 90),
+            ("Net", "실근무", 110),
+            ("Type", "근무유형", 200),
+            ("Total", "환산합계", 120)
         ]
         
         for col_id, header_text, width in columns:
@@ -266,6 +266,7 @@ class OTCalculator(ctk.CTk):
         
         # 변수 초기화
         grand_total_weighted = 0
+        grand_total_actual = 0  # 실제 OT 시간 합계
         current_year = datetime.now().year
         processed_count = 0
 
@@ -274,18 +275,28 @@ class OTCalculator(ctk.CTk):
             date_val, start_time, end_time, rest_minutes = match
             
             try:
-                # 날짜 객체 생성
-                full_date_str = f"{current_year}/{date_val}"
-                date_obj = datetime.strptime(full_date_str, "%Y/%m/%d")
+                # 날짜 객체 생성 (연도 처리 개선)
+                month, day = map(int, date_val.split('/'))
+                
+                # 현재 월보다 큰 월이면 작년 데이터로 간주
+                current_month = datetime.now().month
+                if month > current_month + 1:  # 여유를 두고 판단
+                    year = current_year - 1
+                else:
+                    year = current_year
+                
+                date_obj = datetime(year, month, day)
                 
                 # 공휴일 및 주말 판단
-                is_holiday = (
-                    date_obj.weekday() >= 5 or  # 토요일(5), 일요일(6)
-                    date_obj in self.kr_holidays  # 한국 공휴일
-                )
+                is_weekend = date_obj.weekday() >= 5  # 토요일(5), 일요일(6)
+                is_public_holiday = date_obj in self.kr_holidays
+                is_holiday = is_weekend or is_public_holiday
                 
-                holiday_name = self.kr_holidays.get(date_obj) if date_obj in self.kr_holidays else ""
+                holiday_name = self.kr_holidays.get(date_obj) if is_public_holiday else ""
                 day_name = ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
+
+                # 디버그: 요일 확인 출력
+                print(f"{date_val} ({day_name}) - weekday: {date_obj.weekday()}, is_holiday: {is_holiday}")
 
                 # 시간 계산
                 start = datetime.strptime(start_time, "%H:%M")
@@ -299,6 +310,10 @@ class OTCalculator(ctk.CTk):
                 total_hours = (end - start).total_seconds() / 3600
                 rest_hours = float(rest_minutes) / 60
                 net_hours = total_hours - rest_hours
+                
+                # 실제 OT 시간 계산 (8시간 초과분)
+                actual_ot = max(0, net_hours - 8)
+                grand_total_actual += actual_ot
                 
                 # 환산 시간 계산 (법정 가중치 적용)
                 if is_holiday:
@@ -336,7 +351,11 @@ class OTCalculator(ctk.CTk):
         self.summary_box.tag_config("center", justify='center')
         
         if processed_count > 0:
-            summary_text = f"\nTOTAL WEIGHTED OT: {grand_total_weighted:.1f} HOURS\n({processed_count} days processed)"
+            summary_text = (
+                f"\nACTUAL OT: {grand_total_actual:.1f} HOURS  |  "
+                f"WEIGHTED OT: {grand_total_weighted:.1f} HOURS\n"
+                f"({processed_count} days processed)"
+            )
             self.summary_box.insert("0.0", summary_text, "center")
         else:
             # 데이터가 없는 경우
