@@ -7,7 +7,17 @@ import customtkinter as ctk
 from PIL import Image, ImageEnhance
 import pytesseract
 from datetime import datetime, timedelta
-import holidays # 공휴일 판별을 위한 라이브러리
+import holidays
+import ctypes # 4K DPI 인식을 위한 라이브러리
+
+# 1. 윈도우 DPI 인식 설정 (4K 해상도 글자 흐림/작음 방지)
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except:
+        pass
 
 def resource_path(relative_path):
     try:
@@ -19,11 +29,18 @@ def resource_path(relative_path):
 class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
+        
+        # 2. 해상도별 상대적 크기 계산 (DPI Scale 기반)
+        # 윈도우 배율이 150%, 200% 등일 때 이를 감지하여 UI 크기 조정
+        self.scaling = self.winfo_fpixels('1i') / 96.0
+        
         self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
-        self.geometry("1100x750")
+        # 창 크기도 배율에 맞게 조절
+        win_w = int(1100 * self.scaling)
+        win_h = int(800 * self.scaling)
+        self.geometry(f"{win_w}x{win_h}")
         ctk.set_appearance_mode("light")
         
-        # 대한민국 공휴일 정보 로드 (2025-2026년 포함)
         self.kr_holidays = holidays.KR()
         
         try:
@@ -35,25 +52,34 @@ class OTCalculator(ctk.CTk):
         self.setup_ui()
 
     def setup_ui(self):
+        # 상단 버튼 (배율에 따른 폰트 크기 적용)
+        btn_font_size = int(18 * self.scaling)
         self.btn_load = ctk.CTkButton(self, text="Load Shiftee Screenshot", 
-                                      command=self.load_image, font=("Segoe UI", 18, "bold"),
-                                      width=350, height=55)
+                                      command=self.load_image, font=("Segoe UI", btn_font_size, "bold"),
+                                      width=int(350 * self.scaling), height=int(55 * self.scaling))
         self.btn_load.pack(pady=20)
 
-        style = ttk.Style()
-        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
-        style.configure("Treeview", font=("Segoe UI", 10), rowheight=30) 
+        # 3. 표(Treeview) 글씨 크기 가변 설정
+        header_font_size = int(12 * self.scaling)
+        body_font_size = int(11 * self.scaling)
+        row_height = int(35 * self.scaling)
 
-        # 표 구성: 휴일 여부 확인을 위한 비고란 추가
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Treeview.Heading", font=("Segoe UI", header_font_size, "bold"))
+        style.configure("Treeview", font=("Segoe UI", body_font_size), rowheight=row_height) 
+
         self.tree = ttk.Treeview(self, columns=("Date", "Range", "Rest", "Net", "Type", "Total"), show='headings')
         headers = [("Date", "날짜"), ("Range", "근무시간"), ("Rest", "휴게"), ("Net", "실근무"), ("Type", "근무유형"), ("Total", "환산합계")]
         
         for col, name in headers:
             self.tree.heading(col, text=name)
-            self.tree.column(col, width=140, anchor="center")
+            self.tree.column(col, width=int(140 * self.scaling), anchor="center")
         self.tree.pack(pady=10, fill="both", expand=True, padx=20)
 
-        self.summary_box = ctk.CTkTextbox(self, height=120, font=("Segoe UI", 24, "bold"), border_width=2)
+        # 하단 합계창 폰트 가변 설정
+        summary_font_size = int(24 * self.scaling)
+        self.summary_box = ctk.CTkTextbox(self, height=int(120 * self.scaling), font=("Segoe UI", summary_font_size, "bold"), border_width=2)
         self.summary_box.pack(pady=20, fill="x", padx=20)
 
     def load_image(self):
@@ -67,6 +93,7 @@ class OTCalculator(ctk.CTk):
             img = ImageEnhance.Contrast(img).enhance(2.0)
             img = img.point(lambda x: 0 if x < 160 else 255)
             
+            # 성공률 높았던 PSM 4 설정 유지
             raw_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 4')
             self.process_ot_data(raw_text)
         except Exception as e:
@@ -80,40 +107,30 @@ class OTCalculator(ctk.CTk):
 
         for item in self.tree.get_children(): self.tree.delete(item)
         grand_total_weighted = 0
-        current_year = datetime.now().year # 현재 연도 기준 (필요 시 수정)
+        current_year = datetime.now().year
 
         for m in matches:
             date_val, start_s, end_s, rest_m = m
             try:
-                # 1. 공휴일 및 주말 판별
                 full_date_str = f"{current_year}/{date_val}"
                 date_obj = datetime.strptime(full_date_str, "%Y/%m/%d")
                 
-                # 주말이거나 법정 공휴일 이름이 holidays에 존재하면 True
                 is_holiday = date_obj.weekday() >= 5 or date_obj in self.kr_holidays
                 holiday_name = self.kr_holidays.get(date_obj) if date_obj in self.kr_holidays else ""
                 day_name = ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
 
-                # 2. 시간 계산
                 st = datetime.strptime(start_s, "%H:%M")
                 en = datetime.strptime(end_s, "%H:%M")
                 if en < st: en += timedelta(days=1)
                 
                 net_h = (en - st).total_seconds() / 3600 - (float(rest_m) / 60)
                 
-                # 3. 법정 수당 적용 (근로기준법)
                 if is_holiday:
-                    # 휴일 근로: 8시간까지 1.5배, 초과분 2.0배
                     type_str = f"휴일({holiday_name if holiday_name else day_name})"
-                    if net_h <= 8:
-                        weighted_h = net_h * 1.5
-                    else:
-                        weighted_h = (8 * 1.5) + ((net_h - 8) * 2.0)
+                    weighted_h = net_h * 1.5 if net_h <= 8 else (8 * 1.5) + ((net_h - 8) * 2.0)
                 else:
-                    # 평일 근로: 8시간 초과분 1.5배 (기본 1.0 + 가산 0.5)
                     type_str = "평일"
-                    ot_h = max(0, net_h - 8)
-                    weighted_h = net_h + (ot_h * 0.5)
+                    weighted_h = net_h + (max(0, net_h - 8) * 0.5)
                 
                 grand_total_weighted += weighted_h
 
