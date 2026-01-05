@@ -1,10 +1,11 @@
-name: Build Portable OT Calculator
+name: Build Portable OTCalculator (Fixed Engine)
 
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: windows-latest
+    
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -16,8 +17,8 @@ jobs:
 
     - name: Install Tesseract Engine on Server
       run: |
-        # 초콜릿 패키지 매니저로 서버에 Tesseract 설치
-        choco install tesseract --version 5.3.3 -y
+        # 특정 버전 대신 tesseract-ocr 최신 패키지를 설치하여 에러 방지
+        choco install tesseract-ocr -y
 
     - name: Install Python dependencies
       run: |
@@ -28,21 +29,33 @@ jobs:
     - name: Prepare Engine for Bundling
       shell: pwsh
       run: |
-        # 서버에 설치된 Tesseract 파일을 빌드 작업 폴더로 복사
+        # 1. Tesseract가 설치된 실제 경로 확인
+        $installPath = "C:\Program Files\Tesseract-OCR"
+        if (!(Test-Path $installPath)) {
+            $installPath = "C:\ProgramData\chocolatey\lib\tesseract-ocr\tools\tesseract-ocr"
+        }
+        
+        Write-Host "Found Tesseract at: $installPath"
+        
+        # 2. 빌드 작업 폴더로 엔진 파일 복사
         mkdir Tesseract-OCR
-        xcopy "C:\Program Files\Tesseract-OCR\*" "Tesseract-OCR\" /E /H /Y
-        # 저장소의 tessdata(언어 데이터)를 엔진 폴더 내로 강제 복사
+        xcopy "$installPath\*" "Tesseract-OCR\" /E /H /Y
+        
+        # 3. 저장소에 있는 tessdata(한국어/영어 데이터)를 엔진 폴더 내로 덮어쓰기
         if (Test-Path "tessdata") {
             xcopy "tessdata\*" "Tesseract-OCR\tessdata\" /E /H /Y
+            Write-Host "Injected user tessdata into engine folder."
         }
 
     - name: Build Single EXE
       run: |
-        # --add-data 옵션으로 엔진 폴더 자체를 EXE 내부 리소스로 포함
+        # --add-data 옵션을 통해 Tesseract-OCR 폴더 전체를 EXE 내부 리소스로 포함
+        # --onefile: 단일 파일 생성
+        # --windowed: 실행 시 콘솔창 숨김
         pyinstaller --noconfirm --onefile --windowed --add-data "Tesseract-OCR;Tesseract-OCR" --name "OTCalculator" main.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OTCalculator_Ready_To_Run
+        name: OTCalculator_Portable_Full
         path: dist/OTCalculator.exe
