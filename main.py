@@ -4,7 +4,7 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+from PIL import Image, ImageEnhance
 import pytesseract
 from datetime import datetime, timedelta
 
@@ -40,16 +40,17 @@ class OTCalculator(ctk.CTk):
         style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
         style.configure("Treeview", font=("Segoe UI", 10), rowheight=30) 
 
-        self.tree = ttk.Treeview(self, columns=("Date", "Range", "Net", "OT15", "Hol", "Total"), show='headings')
-        headers = [("Date", "날짜"), ("Range", "근무시간"), ("Net", "실근무"), ("OT15", "연장(1.5)"), 
-                   ("Hol", "휴일(1.5~)"), ("Total", "환산합계")]
+        # 표 구성: 휴게시간(Rest) 컬럼 추가
+        self.tree = ttk.Treeview(self, columns=("Date", "Range", "Rest", "Net", "OT15", "Total"), show='headings')
+        headers = [("Date", "날짜"), ("Range", "근무시간"), ("Rest", "휴게시간"), ("Net", "실근무"), ("OT15", "연장(1.5)"), ("Total", "환산합계")]
         
         for col, name in headers:
             self.tree.heading(col, text=name)
-            self.tree.column(col, width=150, anchor="center")
+            self.tree.column(col, width=140, anchor="center")
         self.tree.pack(pady=10, fill="both", expand=True, padx=20)
 
-        self.summary_box = ctk.CTkTextbox(self, height=120, font=("Segoe UI", 22, "bold"), border_width=2)
+        # 최종 합계만 강조하여 표시
+        self.summary_box = ctk.CTkTextbox(self, height=120, font=("Segoe UI", 24, "bold"), border_width=2)
         self.summary_box.pack(pady=20, fill="x", padx=20)
 
     def load_image(self):
@@ -59,14 +60,11 @@ class OTCalculator(ctk.CTk):
             self.btn_load.configure(text="Deep Scanning Data...", state="disabled")
             self.update()
             
-            # [인식률 개선 1] 이미지 강화 전처리
             img = Image.open(file_path).convert('L')
-            img = ImageEnhance.Contrast(img).enhance(2.0) # 대비 2배 강화
-            img = img.point(lambda x: 0 if x < 160 else 255) # 이진화
+            img = ImageEnhance.Contrast(img).enhance(2.0)
+            img = img.point(lambda x: 0 if x < 160 else 255)
             
-            # [인식률 개선 2] PSM 3(자동)과 PSM 4(표)의 장점을 섞기 위해 PSM 4 유지
             raw_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 4')
-            
             self.process_ot_data(raw_text)
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -74,8 +72,7 @@ class OTCalculator(ctk.CTk):
             self.btn_load.configure(text="Load Shiftee Screenshot", state="normal")
 
     def process_ot_data(self, raw_text):
-        # [인식률 개선 3] 더 유연한 정규식: 날짜와 시간, 휴게시간을 독립적으로 찾음
-        # 요일 괄호 ( )가 OCR 오류로 깨지는 경우가 많아 생략하고 숫자 위주로 매칭
+        # 휴게시간 숫자 추출을 포함한 정규식
         pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d+)\s*[분min]', re.S)
         matches = pattern.findall(raw_text)
 
@@ -84,7 +81,7 @@ class OTCalculator(ctk.CTk):
 
         if not matches:
             self.summary_box.delete("0.0", "end")
-            self.summary_box.insert("0.0", "⚠️ 데이터를 읽지 못했습니다. 스크린샷의 글자가 선명한지 확인해주세요.")
+            self.summary_box.insert("0.0", "⚠️ 데이터를 읽지 못했습니다.")
             return
 
         for m in matches:
@@ -94,20 +91,21 @@ class OTCalculator(ctk.CTk):
                 en = datetime.strptime(end_s, "%H:%M")
                 if en < st: en += timedelta(days=1)
                 
-                # 실근무 = 총시간 - 휴게시간
-                net_h = (en - st).total_seconds() / 3600 - (float(rest_m) / 60)
+                # [핵심 계산] (종료시간 - 시작시간) - 휴게시간
+                total_duration_h = (en - st).total_seconds() / 3600
+                rest_h = float(rest_m) / 60
+                net_h = total_duration_h - rest_h
                 
-                # 평일 연장(8시간 초과분 1.5배 가산)
+                # 평일 연장 가산 (실근무 8시간 초과분)
                 ot_15 = max(0, net_h - 8)
                 
-                # 환산 합계 = 기본(1.0) + 연장가산(0.5)
+                # 환산 합계 계산
                 weighted_h = net_h + (ot_15 * 0.5)
-                
                 grand_total_weighted += weighted_h
 
                 self.tree.insert("", "end", values=(
-                    date_val, f"{start_s}-{end_s}", f"{net_h:.1f}h", 
-                    f"{ot_15:.1f}h", "-", f"{weighted_h:.1f}h"
+                    date_val, f"{start_s}-{end_s}", f"{rest_m}분", 
+                    f"{net_h:.1f}h", f"{ot_15:.1f}h", f"{weighted_h:.1f}h"
                 ))
             except: continue
 
