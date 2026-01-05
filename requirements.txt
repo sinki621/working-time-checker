@@ -1,3 +1,4 @@
 pytesseract
 Pillow
 customtkinter
+holidays
