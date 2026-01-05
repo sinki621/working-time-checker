@@ -7,8 +7,20 @@ import customtkinter as ctk
 from PIL import Image, ImageEnhance
 import pytesseract
 from datetime import datetime, timedelta
-import holidays
 import ctypes
+
+# holidays 라이브러리 버전 호환성 처리
+try:
+    import holidays
+    # 최신 버전 시도
+    try:
+        kr_holidays = holidays.country_holidays('KR')
+    except:
+        # 구버전 방식
+        kr_holidays = holidays.KR()
+except ImportError:
+    # holidays 라이브러리가 없는 경우 빈 딕셔너리 사용
+    kr_holidays = {}
 
 # =============================================================================
 # 1. 윈도우 DPI 인식 강제 설정 (4K, 고해상도 모니터 대응)
@@ -56,8 +68,8 @@ class OTCalculator(ctk.CTk):
         # 테마 설정
         ctk.set_appearance_mode("light")
         
-        # 한국 공휴일 데이터 로드
-        self.kr_holidays = holidays.KR()
+        # 한국 공휴일 데이터 로드 (전역에서 이미 초기화됨)
+        self.kr_holidays = kr_holidays
         
         # Tesseract OCR 엔진 경로 설정
         self.setup_tesseract()
