@@ -4,10 +4,11 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageGrab
 import pytesseract
 from datetime import datetime, timedelta
 import ctypes
+import io
 
 # holidays 라이브러리 버전 호환성 처리
 try:
@@ -76,6 +77,10 @@ class OTCalculator(ctk.CTk):
         
         # UI 구성
         self.setup_ui()
+        
+        # 클립보드 붙여넣기 단축키 바인딩 (Ctrl+V)
+        self.bind('<Control-v>', self.paste_from_clipboard)
+        self.bind('<Control-V>', self.paste_from_clipboard)
 
     def setup_tesseract(self):
         """Tesseract OCR 엔진 경로 설정"""
@@ -138,14 +143,28 @@ class OTCalculator(ctk.CTk):
         # 파일 로드 버튼
         self.btn_load = ctk.CTkButton(
             top_frame, 
-            text="Load Shiftee Screenshot", 
+            text="📁 Load File", 
             command=self.load_image, 
             font=("Segoe UI", BTN_FONT_SIZE, "bold"),
-            width=350, 
+            width=180, 
             height=50,
             corner_radius=8
         )
-        self.btn_load.pack(side="left")
+        self.btn_load.pack(side="left", padx=(0, 10))
+        
+        # 클립보드 붙여넣기 버튼
+        self.btn_paste = ctk.CTkButton(
+            top_frame, 
+            text="📋 Paste (Ctrl+V)", 
+            command=lambda: self.paste_from_clipboard(None), 
+            font=("Segoe UI", BTN_FONT_SIZE, "bold"),
+            width=200, 
+            height=50,
+            corner_radius=8,
+            fg_color="#2ecc71",
+            hover_color="#27ae60"
+        )
+        self.btn_paste.pack(side="left")
 
         # =====================================================================
         # 중앙: 데이터 테이블 (Treeview)
@@ -243,10 +262,76 @@ class OTCalculator(ctk.CTk):
         try:
             # 버튼 상태 변경 (처리 중)
             self.btn_load.configure(text="Analyzing...", state="disabled")
+            self.btn_paste.configure(state="disabled")
             self.update()
             
+            # 이미지 로드 및 처리
+            img = Image.open(file_path)
+            self.process_image(img)
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error", 
+                f"Failed to process image:\n\n{str(e)}\n\nPlease check:\n"
+                "1. Tesseract OCR is properly installed\n"
+                "2. Korean language data (kor.traineddata) exists\n"
+                "3. Image file is not corrupted"
+            )
+        finally:
+            # 버튼 상태 복원
+            self.btn_load.configure(text="📁 Load File", state="normal")
+            self.btn_paste.configure(state="normal")
+
+    def paste_from_clipboard(self, event):
+        """클립보드에서 이미지 붙여넣기"""
+        try:
+            # 버튼 상태 변경 (처리 중)
+            self.btn_load.configure(state="disabled")
+            self.btn_paste.configure(text="Analyzing...", state="disabled")
+            self.update()
+            
+            # 클립보드에서 이미지 가져오기
+            img = ImageGrab.grabclipboard()
+            
+            if img is None:
+                messagebox.showwarning(
+                    "No Image in Clipboard",
+                    "클립보드에 이미지가 없습니다.\n\n"
+                    "스크린샷을 복사한 후 다시 시도해주세요.\n"
+                    "(Win + Shift + S 또는 Print Screen)"
+                )
+                return
+            
+            # PIL Image 객체인지 확인
+            if not isinstance(img, Image.Image):
+                # 파일 경로 리스트인 경우 (윈도우에서 파일 복사)
+                if isinstance(img, list) and len(img) > 0:
+                    img = Image.open(img[0])
+                else:
+                    messagebox.showwarning(
+                        "Invalid Clipboard Content",
+                        "클립보드 내용을 이미지로 변환할 수 없습니다."
+                    )
+                    return
+            
+            # 이미지 처리
+            self.process_image(img)
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Clipboard Error",
+                f"클립보드에서 이미지를 가져오는데 실패했습니다:\n\n{str(e)}"
+            )
+        finally:
+            # 버튼 상태 복원
+            self.btn_load.configure(state="normal")
+            self.btn_paste.configure(text="📋 Paste (Ctrl+V)", state="normal")
+
+    def process_image(self, img):
+        """이미지 전처리 및 OCR 실행"""
+        try:
             # 이미지 전처리 (OCR 정확도 향상)
-            img = Image.open(file_path).convert('L')  # 흑백 변환
+            img = img.convert('L')  # 흑백 변환
             img = ImageEnhance.Contrast(img).enhance(2.0)  # 대비 증가
             img = img.point(lambda x: 0 if x < 160 else 255)  # 이진화
             
@@ -261,16 +346,7 @@ class OTCalculator(ctk.CTk):
             self.process_ot_data(raw_text)
             
         except Exception as e:
-            messagebox.showerror(
-                "Error", 
-                f"Failed to process image:\n\n{str(e)}\n\nPlease check:\n"
-                "1. Tesseract OCR is properly installed\n"
-                "2. Korean language data (kor.traineddata) exists\n"
-                "3. Image file is not corrupted"
-            )
-        finally:
-            # 버튼 상태 복원
-            self.btn_load.configure(text="Load Shiftee Screenshot", state="normal")
+            raise Exception(f"Image processing failed: {str(e)}")
 
     def process_ot_data(self, raw_text):
         """OCR로 추출한 텍스트를 파싱하여 초과근무 시간 계산"""
