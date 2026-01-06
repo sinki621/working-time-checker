@@ -10,19 +10,6 @@ from datetime import datetime, timedelta
 import ctypes
 import io
 
-# holidays 라이브러리 버전 호환성 처리
-try:
-    import holidays
-    # 최신 버전 시도
-    try:
-        kr_holidays = holidays.country_holidays('KR')
-    except:
-        # 구버전 방식
-        kr_holidays = holidays.KR()
-except ImportError:
-    # holidays 라이브러리가 없는 경우 빈 딕셔너리 사용
-    kr_holidays = {}
-
 # =============================================================================
 # 1. 윈도우 DPI 인식 강제 설정 (4K, 고해상도 모니터 대응)
 # =============================================================================
@@ -36,6 +23,19 @@ except:
             ctypes.windll.user32.SetProcessDPIAware()  # 레거시 방식
         except:
             pass  # DPI 설정 실패해도 프로그램은 실행
+
+# holidays 라이브러리 버전 호환성 처리
+try:
+    import holidays
+    # 최신 버전 시도
+    try:
+        kr_holidays = holidays.country_holidays('KR')
+    except:
+        # 구버전 방식
+        kr_holidays = holidays.KR()
+except ImportError:
+    # holidays 라이브러리가 없는 경우 빈 딕셔너리 사용
+    kr_holidays = {}
 
 # =============================================================================
 # 2. PyInstaller 번들 리소스 경로 처리
@@ -63,8 +63,8 @@ class OTCalculator(ctk.CTk):
         
         # 창 설정
         self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
-        self.geometry("1100x800")
-        self.minsize(900, 600)
+        self.geometry("1400x850")
+        self.minsize(1200, 700)
         
         # 테마 설정
         ctk.set_appearance_mode("light")
@@ -111,7 +111,6 @@ class OTCalculator(ctk.CTk):
         HEADER_FONT_SIZE = 11
         BODY_FONT_SIZE = 10
         ROW_HEIGHT = 28
-        SUMMARY_FONT_SIZE = 20
         
         # =====================================================================
         # 상단: 연도 선택 + 파일 로드 버튼
@@ -164,7 +163,21 @@ class OTCalculator(ctk.CTk):
             fg_color="#2ecc71",
             hover_color="#27ae60"
         )
-        self.btn_paste.pack(side="left")
+        self.btn_paste.pack(side="left", padx=(0, 10))
+        
+        # Sample 버튼
+        self.btn_sample = ctk.CTkButton(
+            top_frame, 
+            text="📄 Sample", 
+            command=self.show_sample, 
+            font=("Segoe UI", BTN_FONT_SIZE, "bold"),
+            width=150, 
+            height=50,
+            corner_radius=8,
+            fg_color="#9b59b6",
+            hover_color="#8e44ad"
+        )
+        self.btn_sample.pack(side="left")
 
         # =====================================================================
         # 중앙: 데이터 테이블 (Treeview)
@@ -209,7 +222,7 @@ class OTCalculator(ctk.CTk):
         # Treeview 생성
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=("Date", "Range", "Rest", "Net", "Type", "Total"),
+            columns=("Date", "Range", "Rest", "Net", "Diff", "Type", "x1.5", "x2.0", "x2.5", "Total"),
             show='headings',
             yscrollcommand=scrollbar.set
         )
@@ -219,12 +232,16 @@ class OTCalculator(ctk.CTk):
         
         # 컬럼 정의 (이름, 헤더 텍스트, 너비)
         columns = [
-            ("Date", "날짜", 140),
-            ("Range", "근무시간", 160),
-            ("Rest", "휴게", 90),
-            ("Net", "실근무", 110),
-            ("Type", "근무유형", 200),
-            ("Total", "환산합계", 120)
+            ("Date", "날짜", 120),
+            ("Range", "근무시간", 140),
+            ("Rest", "휴게", 80),
+            ("Net", "실근무", 90),
+            ("Diff", "기준차이", 100),
+            ("Type", "근무유형", 140),
+            ("x1.5", "OT×1.5", 90),
+            ("x2.0", "OT×2.0", 90),
+            ("x2.5", "OT×2.5", 90),
+            ("Total", "환산합계", 100)
         ]
         
         for col_id, header_text, width in columns:
@@ -234,17 +251,39 @@ class OTCalculator(ctk.CTk):
         self.tree.pack(side="left", fill="both", expand=True)
 
         # =====================================================================
-        # 하단: 합계 표시 박스
+        # 하단: 합계 테이블
         # =====================================================================
-        self.summary_box = ctk.CTkTextbox(
-            self, 
-            height=100,
-            font=("Segoe UI", SUMMARY_FONT_SIZE, "bold"),
-            border_width=2,
-            fg_color="white",
-            corner_radius=8
+        summary_frame = ctk.CTkFrame(self, fg_color="white", border_width=2)
+        summary_frame.pack(pady=15, fill="x", padx=20)
+        
+        # 합계 테이블 생성
+        self.summary_tree = ttk.Treeview(
+            summary_frame,
+            columns=("Label", "Net", "OT", "x1.5", "x2.0", "x2.5", "Total"),
+            show='headings',
+            height=3
         )
-        self.summary_box.pack(pady=15, fill="x", padx=20)
+        
+        # 합계 테이블 스타일
+        style.configure("Summary.Treeview", rowheight=35)
+        self.summary_tree.configure(style="Summary.Treeview")
+        
+        # 합계 컬럼 정의
+        summary_columns = [
+            ("Label", "구분", 140),
+            ("Net", "실근무", 120),
+            ("OT", "순수OT", 120),
+            ("x1.5", "OT×1.5", 120),
+            ("x2.0", "OT×2.0", 120),
+            ("x2.5", "OT×2.5", 120),
+            ("Total", "환산합계", 120)
+        ]
+        
+        for col_id, header_text, width in summary_columns:
+            self.summary_tree.heading(col_id, text=header_text)
+            self.summary_tree.column(col_id, width=width, anchor="center")
+        
+        self.summary_tree.pack(fill="x", padx=10, pady=10)
 
     def load_image(self):
         """스크린샷 파일 선택 및 로드"""
@@ -332,14 +371,14 @@ class OTCalculator(ctk.CTk):
         try:
             # 이미지 전처리 (OCR 정확도 향상)
             img = img.convert('L')  # 흑백 변환
-            img = ImageEnhance.Contrast(img).enhance(2.0)  # 대비 증가
-            img = img.point(lambda x: 0 if x < 160 else 255)  # 이진화
+            img = ImageEnhance.Contrast(img).enhance(2.2)  # 대비 더 강화
+            img = img.point(lambda x: 0 if x < 155 else 255)  # 이진화
             
             # OCR 실행 (한국어 + 영어)
             raw_text = pytesseract.image_to_string(
                 img, 
                 lang='kor+eng',
-                config='--psm 4'  # PSM 4: 단일 컬럼 텍스트 가정
+                config='--psm 6'  # PSM 6: 단일 텍스트 블록 (더 정확한 인식)
             )
             
             # 추출된 텍스트 처리
@@ -348,15 +387,143 @@ class OTCalculator(ctk.CTk):
         except Exception as e:
             raise Exception(f"Image processing failed: {str(e)}")
 
+    def show_sample(self):
+        """예제 이미지 표시"""
+        try:
+            # sample.png 파일 경로 찾기
+            sample_path = resource_path("sample.png")
+            
+            # 파일이 없으면 현재 디렉토리에서도 시도
+            if not os.path.exists(sample_path):
+                sample_path = "sample.png"
+            
+            if not os.path.exists(sample_path):
+                messagebox.showwarning(
+                    "Sample Not Found",
+                    "sample.png 파일을 찾을 수 없습니다.\n\n"
+                    "루트 폴더에 sample.png 파일이 있는지 확인해주세요."
+                )
+                return
+            
+            # 새 창 생성
+            sample_window = tk.Toplevel(self)
+            sample_window.title("스크린샷 예제")
+            sample_window.geometry("1000x700")
+            
+            # 창을 화면 중앙에 배치
+            sample_window.update_idletasks()
+            x = (sample_window.winfo_screenwidth() // 2) - (1000 // 2)
+            y = (sample_window.winfo_screenheight() // 2) - (700 // 2)
+            sample_window.geometry(f"1000x700+{x}+{y}")
+            
+            # 안내 텍스트
+            info_label = tk.Label(
+                sample_window,
+                text="📸 예제와 같이 스크린샷을 찍으세요",
+                font=("Segoe UI", 18, "bold"),
+                fg="#2c3e50",
+                bg="white",
+                pady=15
+            )
+            info_label.pack(fill="x")
+            
+            # 추가 설명
+            detail_label = tk.Label(
+                sample_window,
+                text="• 날짜, 근무시간, 휴게시간이 모두 보이도록 캡처하세요\n"
+                     "• 여러 날의 데이터를 한번에 캡처할 수 있습니다\n"
+                     "• Win + Shift + S 로 화면 일부를 캡처한 후 Ctrl+V로 붙여넣기",
+                font=("Segoe UI", 11),
+                fg="#34495e",
+                bg="white",
+                justify="left",
+                pady=10
+            )
+            detail_label.pack(fill="x")
+            
+            # 이미지 표시를 위한 프레임
+            img_frame = tk.Frame(sample_window, bg="white")
+            img_frame.pack(fill="both", expand=True, padx=20, pady=10)
+            
+            # 스크롤바 추가
+            canvas = tk.Canvas(img_frame, bg="white")
+            scrollbar_y = tk.Scrollbar(img_frame, orient="vertical", command=canvas.yview)
+            scrollbar_x = tk.Scrollbar(img_frame, orient="horizontal", command=canvas.xview)
+            
+            # 이미지를 담을 프레임
+            scrollable_frame = tk.Frame(canvas, bg="white")
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+            
+            # 이미지 로드 및 표시
+            sample_img = Image.open(sample_path)
+            
+            # 이미지 크기 조정 (너무 크면 축소)
+            max_width = 950
+            max_height = 550
+            img_width, img_height = sample_img.size
+            
+            if img_width > max_width or img_height > max_height:
+                ratio = min(max_width / img_width, max_height / img_height)
+                new_width = int(img_width * ratio)
+                new_height = int(img_height * ratio)
+                sample_img = sample_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # PIL Image를 Tkinter PhotoImage로 변환
+            photo = tk.PhotoImage(data=sample_img.tobytes(), width=sample_img.width, height=sample_img.height)
+            
+            # 실제로는 ImageTk를 사용해야 하므로 다시 작성
+            try:
+                from PIL import ImageTk
+                photo = ImageTk.PhotoImage(sample_img)
+            except ImportError:
+                # ImageTk가 없으면 기본 방법 사용
+                photo = tk.PhotoImage(file=sample_path)
+            
+            img_label = tk.Label(scrollable_frame, image=photo, bg="white")
+            img_label.image = photo  # 참조 유지
+            img_label.pack()
+            
+            # 스크롤바 배치
+            scrollbar_y.pack(side="right", fill="y")
+            scrollbar_x.pack(side="bottom", fill="x")
+            canvas.pack(side="left", fill="both", expand=True)
+            
+            # 닫기 버튼
+            close_btn = tk.Button(
+                sample_window,
+                text="닫기",
+                font=("Segoe UI", 12, "bold"),
+                bg="#3498db",
+                fg="white",
+                padx=30,
+                pady=10,
+                command=sample_window.destroy,
+                relief="flat",
+                cursor="hand2"
+            )
+            close_btn.pack(pady=15)
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"예제 이미지를 표시할 수 없습니다:\n\n{str(e)}"
+            )
+
     def process_ot_data(self, raw_text):
         """OCR로 추출한 텍스트를 파싱하여 초과근무 시간 계산"""
         
-        # 정규식 패턴: 날짜, 시간, 휴게시간 추출
-        # 예: 12/25 09:00-18:00 60분 또는 12/25 09:00-18:00 60m
+        # 정규식 패턴 개선: 휴게시간 인식 정확도 향상
+        # 60분, 60 분, 60m, 60 m, 60min 등 다양한 형식 지원
         pattern = re.compile(
             r'(\d{1,2}/\d{1,2}).*?'  # 날짜 (예: 12/25)
-            r'(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?'  # 시간 범위 (예: 09:00-18:00)
-            r'(\d+)\s*(?:분|m|min)',  # 휴게시간 (예: 60분 또는 60m)
+            r'(\d{2}:\d{2})\s*[-~]\s*(\d{2}:\d{2}).*?'  # 시간 범위
+            r'(\d+)\s*(?:분|m|min|M|MIN)',  # 휴게시간 (다양한 형식)
             re.S | re.I
         )
         matches = pattern.findall(raw_text)
@@ -364,13 +531,16 @@ class OTCalculator(ctk.CTk):
         # 기존 테이블 데이터 삭제
         for item in self.tree.get_children():
             self.tree.delete(item)
+        for item in self.summary_tree.get_children():
+            self.summary_tree.delete(item)
         
         # 변수 초기화
-        grand_total_weighted = 0
-        grand_total_actual = 0  # 실제 OT 시간 합계
-        selected_year = int(self.year_var.get())  # 선택된 연도 가져오기
+        selected_year = int(self.year_var.get())
         processed_count = 0
-
+        
+        # 일별 데이터 저장
+        daily_data = []
+        
         # 각 매칭된 데이터 처리
         for match in matches:
             date_val, start_time, end_time, rest_minutes = match
@@ -401,64 +571,139 @@ class OTCalculator(ctk.CTk):
                 rest_hours = float(rest_minutes) / 60
                 net_hours = total_hours - rest_hours
                 
-                # 실제 OT 시간 계산 (8시간 초과분)
-                actual_ot = max(0, net_hours - 8)
-                grand_total_actual += actual_ot
+                # 기준시간 대비 차이 (8시간 기준)
+                diff_hours = net_hours - 8.0
                 
-                # 환산 시간 계산 (법정 가중치 적용)
-                if is_holiday:
-                    # 휴일 근무: 8시간까지 1.5배, 초과분 2.0배
-                    type_str = f"휴일({holiday_name if holiday_name else day_name})"
-                    if net_hours <= 8:
-                        weighted_hours = net_hours * 1.5
-                    else:
-                        weighted_hours = (8 * 1.5) + ((net_hours - 8) * 2.0)
-                else:
-                    # 평일 근무: 8시간까지 1.0배, 초과분 1.5배
-                    type_str = "평일"
-                    weighted_hours = net_hours + (max(0, net_hours - 8) * 0.5)
+                # 일별 데이터 저장
+                daily_data.append({
+                    'date': date_obj,
+                    'date_val': date_val,
+                    'day_name': day_name,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'rest_minutes': rest_minutes,
+                    'net_hours': net_hours,
+                    'diff_hours': diff_hours,
+                    'is_holiday': is_holiday,
+                    'holiday_name': holiday_name
+                })
                 
-                grand_total_weighted += weighted_hours
                 processed_count += 1
-
-                # 테이블에 행 추가
-                self.tree.insert("", "end", values=(
-                    f"{date_val}({day_name})",
-                    f"{start_time}-{end_time}",
-                    f"{rest_minutes}분",
-                    f"{net_hours:.1f}h",
-                    type_str,
-                    f"{weighted_hours:.1f}h"
-                ))
                 
             except Exception as e:
-                # 개별 행 처리 실패 시 스킵 (전체 처리는 계속)
                 print(f"⚠ Failed to process row: {match} - {e}")
                 continue
-
-        # 결과 요약 표시
-        self.summary_box.delete("0.0", "end")
-        self.summary_box.tag_config("center", justify='center')
         
-        if processed_count > 0:
-            summary_text = (
-                f"\nACTUAL OT: {grand_total_actual:.1f} HOURS  |  "
-                f"WEIGHTED OT: {grand_total_weighted:.1f} HOURS\n"
-                f"({processed_count} days processed)"
-            )
-            self.summary_box.insert("0.0", summary_text, "center")
-        else:
-            # 데이터가 없는 경우
-            error_text = "\n⚠ No overtime data detected\n\nPlease check:\n• Screenshot quality\n• Date format (MM/DD)\n• Time format (HH:MM)"
-            self.summary_box.insert("0.0", error_text, "center")
+        # 데이터가 없는 경우
+        if processed_count == 0:
             messagebox.showwarning(
                 "No Data Found",
-                "Could not extract overtime data from the image.\n\n"
-                "Please ensure:\n"
-                "1. Screenshot shows clear date and time information\n"
-                "2. Format: MM/DD HH:MM-HH:MM with rest time in minutes\n"
-                "3. Image is not blurry or too dark"
+                "근무 데이터를 찾을 수 없습니다.\n\n"
+                "확인사항:\n"
+                "1. 날짜 형식: MM/DD\n"
+                "2. 시간 형식: HH:MM-HH:MM\n"
+                "3. 휴게시간: 숫자+분 (예: 60분)\n"
+                "4. 이미지가 선명한지 확인"
             )
+            return
+        
+        # 날짜순 정렬
+        daily_data.sort(key=lambda x: x['date'])
+        
+        # 유연근무제 계산: 누적 차이 시간 추적
+        cumulative_diff = 0
+        
+        # 합계 변수
+        total_net = 0
+        total_ot_15 = 0  # 1.5배 OT
+        total_ot_20 = 0  # 2.0배 OT
+        total_ot_25 = 0  # 2.5배 OT
+        
+        # 각 일자별 계산 및 표시
+        for data in daily_data:
+            net_hours = data['net_hours']
+            diff_hours = data['diff_hours']
+            is_holiday = data['is_holiday']
+            
+            # 누적 차이 업데이트
+            cumulative_diff += diff_hours
+            
+            # 순수 OT 계산 (누적 기준)
+            if cumulative_diff > 0:
+                pure_ot = cumulative_diff
+            else:
+                pure_ot = 0
+            
+            # 배율별 OT 계산
+            ot_15 = 0  # 평일 8시간 초과
+            ot_20 = 0  # 휴일 8시간 초과
+            ot_25 = 0  # 사용 안 함
+            
+            if is_holiday:
+                # 휴일: 전체 근무시간에 1.5배 (8시간까지) + 2.0배 (초과분)
+                type_str = f"휴일({data['holiday_name'] if data['holiday_name'] else data['day_name']})"
+                if net_hours > 0:
+                    if net_hours <= 8:
+                        ot_15 = net_hours * 0.5  # 실제로는 1.5배이므로 0.5 추가
+                    else:
+                        ot_15 = 8 * 0.5
+                        ot_20 = net_hours - 8
+            else:
+                # 평일: 8시간 초과분만 1.5배
+                type_str = "평일"
+                if diff_hours > 0:
+                    ot_15 = diff_hours * 0.5
+            
+            # 환산 합계
+            weighted_total = net_hours + ot_15 + ot_20 + ot_25
+            
+            # 합계 누적
+            total_net += net_hours
+            total_ot_15 += ot_15
+            total_ot_20 += ot_20
+            total_ot_25 += ot_25
+            
+            # 기준차이 표시 (+ 또는 -)
+            if abs(diff_hours) < 0.1:
+                diff_str = "-"
+            elif diff_hours > 0:
+                diff_str = f"+{diff_hours:.1f}h"
+            else:
+                diff_str = f"{diff_hours:.1f}h"
+            
+            # 테이블에 행 추가
+            self.tree.insert("", "end", values=(
+                f"{data['date_val']}({data['day_name']})",
+                f"{data['start_time']}-{data['end_time']}",
+                f"{data['rest_minutes']}분",
+                f"{net_hours:.1f}h",
+                diff_str,
+                type_str,
+                f"{ot_15:.1f}h" if ot_15 > 0 else "-",
+                f"{ot_20:.1f}h" if ot_20 > 0 else "-",
+                f"{ot_25:.1f}h" if ot_25 > 0 else "-",
+                f"{weighted_total:.1f}h"
+            ))
+        
+        # 순수 OT 계산 (40시간 기준 주간 또는 전체 누적)
+        pure_ot_total = max(0, cumulative_diff)
+        
+        # 최종 환산 합계
+        final_weighted = total_net + total_ot_15 + total_ot_20 + total_ot_25
+        
+        # 합계 테이블 업데이트
+        self.summary_tree.insert("", "end", values=(
+            "합계",
+            f"{total_net:.1f}h",
+            f"{pure_ot_total:.1f}h",
+            f"{total_ot_15:.1f}h",
+            f"{total_ot_20:.1f}h",
+            f"{total_ot_25:.1f}h" if total_ot_25 > 0 else "-",
+            f"{final_weighted:.1f}h"
+        ), tags=('total',))
+        
+        # 합계 행 스타일 (굵게)
+        self.summary_tree.tag_configure('total', font=("Segoe UI", 11, "bold"))
 
 # =============================================================================
 # 4. 프로그램 진입점
