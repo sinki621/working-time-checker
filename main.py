@@ -109,10 +109,35 @@ class OTCalculator(ctk.CTk):
         SUMMARY_FONT_SIZE = 20
         
         # =====================================================================
-        # 상단: 파일 로드 버튼
+        # 상단: 연도 선택 + 파일 로드 버튼
         # =====================================================================
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.pack(pady=15)
+        
+        # 연도 선택 레이블
+        year_label = ctk.CTkLabel(
+            top_frame,
+            text="Year:",
+            font=("Segoe UI", 14, "bold")
+        )
+        year_label.pack(side="left", padx=(0, 10))
+        
+        # 연도 선택 드롭다운
+        self.year_var = ctk.StringVar(value="2025")
+        self.year_dropdown = ctk.CTkComboBox(
+            top_frame,
+            values=["2024", "2025", "2026"],
+            variable=self.year_var,
+            font=("Segoe UI", 14),
+            width=100,
+            height=50,
+            state="readonly"
+        )
+        self.year_dropdown.pack(side="left", padx=(0, 20))
+        
+        # 파일 로드 버튼
         self.btn_load = ctk.CTkButton(
-            self, 
+            top_frame, 
             text="Load Shiftee Screenshot", 
             command=self.load_image, 
             font=("Segoe UI", BTN_FONT_SIZE, "bold"),
@@ -120,7 +145,7 @@ class OTCalculator(ctk.CTk):
             height=50,
             corner_radius=8
         )
-        self.btn_load.pack(pady=15)
+        self.btn_load.pack(side="left")
 
         # =====================================================================
         # 중앙: 데이터 테이블 (Treeview)
@@ -267,7 +292,7 @@ class OTCalculator(ctk.CTk):
         # 변수 초기화
         grand_total_weighted = 0
         grand_total_actual = 0  # 실제 OT 시간 합계
-        current_year = datetime.now().year
+        selected_year = int(self.year_var.get())  # 선택된 연도 가져오기
         processed_count = 0
 
         # 각 매칭된 데이터 처리
@@ -275,17 +300,9 @@ class OTCalculator(ctk.CTk):
             date_val, start_time, end_time, rest_minutes = match
             
             try:
-                # 날짜 객체 생성 (연도 처리 개선)
+                # 날짜 객체 생성 (선택된 연도 사용)
                 month, day = map(int, date_val.split('/'))
-                
-                # 현재 월보다 큰 월이면 작년 데이터로 간주
-                current_month = datetime.now().month
-                if month > current_month + 1:  # 여유를 두고 판단
-                    year = current_year - 1
-                else:
-                    year = current_year
-                
-                date_obj = datetime(year, month, day)
+                date_obj = datetime(selected_year, month, day)
                 
                 # 공휴일 및 주말 판단
                 is_weekend = date_obj.weekday() >= 5  # 토요일(5), 일요일(6)
@@ -294,9 +311,6 @@ class OTCalculator(ctk.CTk):
                 
                 holiday_name = self.kr_holidays.get(date_obj) if is_public_holiday else ""
                 day_name = ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
-
-                # 디버그: 요일 확인 출력
-                print(f"{date_val} ({day_name}) - weekday: {date_obj.weekday()}, is_holiday: {is_holiday}")
 
                 # 시간 계산
                 start = datetime.strptime(start_time, "%H:%M")
