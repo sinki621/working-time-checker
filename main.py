@@ -369,16 +369,25 @@ class OTCalculator(ctk.CTk):
     def process_image(self, img):
         """이미지 전처리 및 OCR 실행"""
         try:
-            # 이미지 전처리 (OCR 정확도 향상)
+            # 이미지 전처리 - 휴게시간 인식률 향상을 위한 최적화
             img = img.convert('L')  # 흑백 변환
-            img = ImageEnhance.Contrast(img).enhance(2.2)  # 대비 더 강화
-            img = img.point(lambda x: 0 if x < 155 else 255)  # 이진화
             
-            # OCR 실행 (한국어 + 영어)
+            # 선명도 향상
+            from PIL import ImageFilter
+            img = img.filter(ImageFilter.SHARPEN)
+            
+            # 대비 강화
+            img = ImageEnhance.Contrast(img).enhance(2.5)
+            
+            # 이진화 (임계값 조정)
+            img = img.point(lambda x: 0 if x < 150 else 255)
+            
+            # OCR 실행 (한국어 + 영어) - PSM 모드 최적화
+            # PSM 6: 단일 텍스트 블록 (표 형식에 적합)
             raw_text = pytesseract.image_to_string(
                 img, 
                 lang='kor+eng',
-                config='--psm 6'  # PSM 6: 단일 텍스트 블록 (더 정확한 인식)
+                config='--psm 6 --oem 3'  # OEM 3: Default (LSTM 엔진)
             )
             
             # 추출된 텍스트 처리
