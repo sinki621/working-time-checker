@@ -75,15 +75,24 @@ jobs:
         # PyInstaller로 단일 실행 파일 생성
         # --onefile: 단일 .exe 파일로 빌드
         # --windowed: 콘솔 창 숨김 (GUI 전용)
-        # --add-data: Tesseract-OCR 폴더를 리소스로 포함
+        # --add-data: Tesseract-OCR 폴더 및 sample.png를 리소스로 포함
         # --name: 출력 파일명
         
-        pyinstaller --noconfirm `
-          --onefile `
-          --windowed `
-          --add-data "Tesseract-OCR;Tesseract-OCR" `
-          --name "OTCalculator" `
-          main.py
+        # sample.png 파일 존재 확인
+        if (Test-Path "sample.png") {
+            Write-Host "✓ sample.png found, including in build"
+            $sampleParam = "--add-data `"sample.png;.`""
+        } else {
+            Write-Host "⚠ sample.png not found, skipping"
+            $sampleParam = ""
+        }
+        
+        $buildCmd = "pyinstaller --noconfirm --onefile --windowed " +
+                    "--add-data `"Tesseract-OCR;Tesseract-OCR`" " +
+                    "$sampleParam " +
+                    "--name `"OTCalculator`" main.py"
+        
+        Invoke-Expression $buildCmd
         
         # 빌드 결과 확인
         if (Test-Path "dist\OTCalculator.exe") {
