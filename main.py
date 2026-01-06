@@ -369,31 +369,39 @@ class OTCalculator(ctk.CTk):
     def process_image(self, img):
         """이미지 전처리 및 OCR 실행"""
         try:
-            # 이미지 전처리 - 숫자 인식률 향상에 최적화
-            img = img.convert('L')  # 흑백 변환
+            # 이미지 전처리
+            img_gray = img.convert('L')  # 흑백 변환
             
             # 선명도 향상
             from PIL import ImageFilter
-            img = img.filter(ImageFilter.SHARPEN)
+            img_sharp = img_gray.filter(ImageFilter.SHARPEN)
             
             # 대비 강화
-            img = ImageEnhance.Contrast(img).enhance(3.0)
+            img_contrast = ImageEnhance.Contrast(img_sharp).enhance(2.8)
             
-            # 이진화 (숫자가 더 잘 보이도록)
-            img = img.point(lambda x: 0 if x < 140 else 255)
+            # 이진화
+            img_binary = img_contrast.point(lambda x: 0 if x < 145 else 255)
             
-            # OCR 실행 - 숫자 인식에 최적화된 설정
-            # digits: 숫자 인식 최적화
-            raw_text = pytesseract.image_to_string(
-                img, 
-                lang='eng',  # 숫자는 영어 모드가 더 정확
+            # 1단계: 전체 텍스트 읽기 (언어 감지 및 구조 파악)
+            full_text = pytesseract.image_to_string(
+                img_binary, 
+                lang='kor+eng',
+                config='--psm 6 --oem 3'
+            )
+            
+            print(f"=== 1단계: 전체 텍스트 읽기 ===\n{full_text[:500]}...\n")
+            
+            # 2단계: 숫자만 정확히 추출
+            digit_text = pytesseract.image_to_string(
+                img_binary, 
+                lang='eng',
                 config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789/:- '
             )
             
-            print(f"=== OCR 원본 (숫자 추출) ===\n{raw_text}\n")
+            print(f"=== 2단계: 숫자 추출 ===\n{digit_text[:500]}...\n")
             
-            # 추출된 텍스트 처리
-            self.process_ot_data(raw_text)
+            # 두 결과를 함께 처리
+            self.process_ot_data(full_text, digit_text)
             
         except Exception as e:
             raise Exception(f"Image processing failed: {str(e)}")
