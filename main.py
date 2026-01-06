@@ -395,8 +395,7 @@ class OTCalculator(ctk.CTk):
             digit_text = pytesseract.image_to_string(
                 img_binary, 
                 lang='eng',
-                config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789/:- 
-'
+                config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789/:- '
             )
             
             print(f"=== 2단계: 숫자 추출 ===\n{digit_text[:500]}...\n")
