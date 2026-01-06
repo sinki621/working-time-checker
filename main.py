@@ -474,19 +474,17 @@ class OTCalculator(ctk.CTk):
                 new_height = int(img_height * ratio)
                 sample_img = sample_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
-            # PIL Image를 Tkinter PhotoImage로 변환
-            photo = tk.PhotoImage(data=sample_img.tobytes(), width=sample_img.width, height=sample_img.height)
+            # PIL Image를 Tkinter에서 표시 가능한 형태로 변환
+            # RGB 모드로 변환 (RGBA나 다른 모드일 경우 대비)
+            if sample_img.mode != 'RGB':
+                sample_img = sample_img.convert('RGB')
             
-            # 실제로는 ImageTk를 사용해야 하므로 다시 작성
-            try:
-                from PIL import ImageTk
-                photo = ImageTk.PhotoImage(sample_img)
-            except ImportError:
-                # ImageTk가 없으면 기본 방법 사용
-                photo = tk.PhotoImage(file=sample_path)
+            # PhotoImage 생성 (PIL의 ImageTk 사용)
+            from PIL import ImageTk
+            photo = ImageTk.PhotoImage(sample_img)
             
             img_label = tk.Label(scrollable_frame, image=photo, bg="white")
-            img_label.image = photo  # 참조 유지
+            img_label.image = photo  # 참조 유지 (가비지 컬렉션 방지)
             img_label.pack()
             
             # 스크롤바 배치
