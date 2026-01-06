@@ -395,7 +395,8 @@ class OTCalculator(ctk.CTk):
             digit_text = pytesseract.image_to_string(
                 img_binary, 
                 lang='eng',
-                config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789/:- '
+                config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789/:- 
+'
             )
             
             print(f"=== 2단계: 숫자 추출 ===\n{digit_text[:500]}...\n")
@@ -403,6 +404,12 @@ class OTCalculator(ctk.CTk):
             # 두 결과를 함께 처리
             self.process_ot_data(full_text, digit_text)
             
+        except TypeError as e:
+            # 함수 호출 오류 상세 정보
+            print(f"TypeError 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"함수 호출 오류: {str(e)}")
         except Exception as e:
             raise Exception(f"Image processing failed: {str(e)}")
 
