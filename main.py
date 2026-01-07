@@ -80,13 +80,13 @@ class OTCalculator(ctk.CTk):
         self.btn_sample = ctk.CTkButton(top_bar, text="💡 Sample", command=self.show_sample, fg_color="#3498db", width=120)
         self.btn_sample.pack(side="right", padx=10)
 
-        # 동적 행 높이 설정
+        # 동적 레이아웃 설정 (폰트 크기 기반)
         tree_font = Font(family="Segoe UI", size=11)
-        calculated_row_height = int(tree_font.metrics('linespace') * 2.5)
+        row_h = int(tree_font.metrics('linespace') * 2.5)
 
         style = ttk.Style()
         style.theme_use("default")
-        style.configure("Treeview", rowheight=calculated_row_height, font=tree_font, background="#ffffff", fieldbackground="#ffffff")
+        style.configure("Treeview", rowheight=row_h, font=tree_font, background="#ffffff", fieldbackground="#ffffff")
         style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
         
         self.tree_frame = ctk.CTkFrame(self)
@@ -135,7 +135,7 @@ class OTCalculator(ctk.CTk):
         try:
             img = ImageOps.grayscale(img)
             img = ImageOps.expand(img, border=50, fill='white')
-            # 총 시간(시간, 분) 텍스트 인식을 위해 kor+eng 모드 사용
+            # 텍스트 구조 파악을 위해 psm 6 사용
             custom_config = r'--oem 1 --psm 6'
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
             self.calculate_data(full_text)
@@ -143,9 +143,10 @@ class OTCalculator(ctk.CTk):
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 1. 근무 범위 패턴 (06:50 - 03:40)
+        # 정규표현식 재설계
+        # 1. 날짜 및 시간 범위 (예: 12/31 (수) 06:50 - 03:40)
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        # 2. 총 시간 패턴 (18시간 50분) - '시간' 키워드를 기준으로 확실히 캡처
+        # 2. 총 시간 (예: 18시간 50분)
         total_time_pattern = re.compile(r'(\d{1,2})\s*시간(?:\s*(\d{1,2})\s*분)?')
         
         for item in self.tree.get_children(): self.tree.delete(item)
@@ -159,98 +160,108 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                st, et = datetime.strptime(s_t, "%H:%M"), datetime.strptime(e_t, "%H:%M")
-                if et < st: et += timedelta(days=1)
+                # 출근/퇴근 객체 생성
+                st_obj = datetime.strptime(s_t, "%H:%M")
+                et_obj = datetime.strptime(e_t, "%H:%M")
+                if et_obj < st_obj: et_obj += timedelta(days=1)
                 
-                # 전체 출퇴근 시간 차이(분)
-                range_minutes = int((et - st).total_seconds() / 60)
+                # 출퇴근 총 소요 분(Minute)
+                range_min = int((et_obj - st_obj).total_seconds() / 60)
                 
-                # [수정] 해당 줄에서 '시간'이라는 단어가 포함된 가장 마지막 숫자를 찾음 (총 시간 컬럼이 보통 오른쪽에 있으므로)
-                total_matches = list(total_time_pattern.finditer(line))
-                if total_matches:
-                    # 줄 내에서 발견된 마지막 'X시간 Y분' 패턴을 총 시간으로 간주
-                    best_match = total_matches[-1]
-                    h_val = int(best_match.group(1))
-                    m_val = int(best_match.group(2)) if best_match.group(2) else 0
-                    actual_worked_minutes = (h_val * 60) + m_val
-                    
-                    # 역산: 휴게시간 = 범위시간 - 실제인식된총시간
-                    break_val = range_minutes - actual_worked_minutes
+                # '총 시간' 값 추출 (이 줄에서 가장 마지막에 나타나는 'X시간 Y분' 패턴 사용)
+                time_found = list(total_time_pattern.finditer(line))
+                if time_found:
+                    last_m = time_found[-1]
+                    h_val = int(last_m.group(1))
+                    m_val = int(last_m.group(2)) if last_m.group(2) else 0
+                    actual_worked_min = (h_val * 60) + m_val
                 else:
-                    # 인식 실패 시 기본값 60분
-                    break_val = 60
-                    actual_worked_minutes = range_minutes - break_val
+                    actual_worked_min = range_min - 60 # 기본값
                 
-                if break_val < 0: break_val = 0
+                # [핵심 로직] 휴게시간은 무조건 (범위 - 실제인식된총시간)으로 정의
+                calculated_break = range_min - actual_worked_min
+                if calculated_break < 0: calculated_break = 0
 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
                 records.append({
-                    'dt': dt, 'st': st, 'et': et, 'brk': break_val, 
-                    'net_min': actual_worked_minutes, 'is_h': is_h, 'range': f"{s_t}-{e_t}"
+                    'dt': dt, 'st': st_obj, 'et': et_obj, 
+                    'brk': calculated_break, 'net_min': actual_worked_min, 
+                    'is_h': is_h, 'range': f"{s_t}-{e_t}"
                 })
             except: continue
 
+        # 날짜순 정렬
         records.sort(key=lambda x: x['dt'])
-        total_net_h, sum15, sum20, sum25, total_minus = 0, 0, 0, 0, 0
+        
+        total_real_h, sum15, sum20, sum25, total_minus = 0, 0, 0, 0, 0
         holiday_list = []
 
         for r in records:
             h10, h15, h20, h25 = 0, 0, 0, 0
+            # 1분 단위 가중치 계산 루프
+            # 근무 시작 시점부터 '이미지에서 역산된 휴게시간'을 뺀 나머지만 루프를 돌림
+            # 이렇게 하면 최종 net_h는 무조건 r['net_min']과 일치하게 됨
             dur = int((r['et'] - r['st']).total_seconds() / 60)
-            worked_min_count = 0
             
+            worked_min_counter = 0
             for m in range(dur):
-                # 역산된 휴게시간(brk)만큼 루프의 앞부분을 확실히 제외
+                # 출근 직후부터 휴게시간만큼은 계산 제외
                 if m < r['brk']: continue
                 
-                check = r['st'] + timedelta(minutes=m)
-                is_n = (check.hour >= 22 or check.hour < 6)
-                worked_min_count += 1
-                ov8 = (worked_min_count > 480)
+                check_time = r['st'] + timedelta(minutes=m)
+                is_night = (check_time.hour >= 22 or check_time.hour < 6)
+                worked_min_counter += 1
+                is_over8 = (worked_min_counter > 480) # 8시간(480분) 초과
                 
-                m_val = 1.0
-                if not r['is_h']:
-                    if ov8 and is_n: m_val = 2.0
-                    elif ov8 or is_n: m_val = 1.5
-                else:
-                    if ov8 and is_n: m_val = 2.5
-                    elif ov8 or is_n: m_val = 2.0 
+                weight = 1.0
+                if not r['is_h']: # 평일
+                    if is_over8 and is_night: weight = 2.0
+                    elif is_over8 or is_night: weight = 1.5
+                else: # 휴일
+                    if is_over8 and is_night: weight = 2.5
+                    elif is_over8 or is_night: weight = 2.0
                 
-                if m_val == 1.0: h10 += 1/60
-                elif m_val == 1.5: h15 += 1/60
-                elif m_val == 2.0: h20 += 1/60
-                elif m_val == 2.5: h25 += 1/60
+                # 가중치별 시간 누적
+                if weight == 1.0: h10 += 1/60
+                elif weight == 1.5: h15 += 1/60
+                elif weight == 2.0: h20 += 1/60
+                elif weight == 2.5: h25 += 1/60
 
-            net_h = h10 + h15 + h20 + h25
-            total_net_h += net_h
+            # 이번 행의 최종 실근무 시간 (소수점 오차 방지를 위해 인식된 분값 사용)
+            row_net_h = r['net_min'] / 60
+            total_real_h += row_net_h
             sum15 += h15; sum20 += h20; sum25 += h25
-            if not r['is_h'] and net_h < 8: total_minus += (8 - net_h)
             
-            day_weighted = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
+            # 부족분 계산 (평일 8시간 미달 시)
+            if not r['is_h'] and row_net_h < 8:
+                total_minus += (8 - row_net_h)
+            
+            day_weighted_sum = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
             w_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
             d_str = f"{r['dt'].strftime('%m/%d')} ({w_name})"
             if r['is_h']: holiday_list.append(d_str)
             
-            # 표에 표시되는 실근무 시간을 '인식된 총 시간' 분(min)을 시/분으로 환산하여 출력
-            net_display = f"{int(r['net_min']//60)}h {int(r['net_min']%60)}m"
-            
             self.tree.insert("", "end", values=(
-                d_str, r['range'], net_display, f"{r['brk']}m",
-                f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{day_weighted:.1f}h"
+                d_str, r['range'], 
+                f"{int(r['net_min']//60)}h {int(r['net_min']%60)}m", 
+                f"{r['brk']}m",
+                f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{day_weighted_sum:.1f}h"
             ))
 
+        # 최종 합산 및 유연근무 상쇄
         adj_x15 = max(0, sum15 - total_minus)
-        final_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+        final_ot_total = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
 
         self.summary_box.delete("0.0", "end")
-        msg = f"1. 총 실근무 합계: {total_net_h:.1f} 시간\n"
+        msg = f"1. 총 실근무 합계: {total_real_h:.1f} 시간\n"
         msg += "-"*60 + "\n2. 배율별 OT 합계 (유연근무 상쇄 적용):\n"
         msg += f"   - [x1.5]: {adj_x15:.1f} h (부족분 {total_minus:.1f}h 차감됨)\n"
         msg += f"   - [x2.0]: {sum20:.1f} h\n   - [x2.5]: {sum25:.1f} h\n"
-        msg += "-"*60 + "\n3. 최종 환산 OT 합계 (가중치 결과): {0:.1f} 시간\n".format(final_ot)
-        if holiday_list: msg += "\n⚠️ [Stand-by 근무여부 확인 필요]\n대상 일자: " + ", ".join(holiday_list)
+        msg += "-"*60 + "\n3. 최종 환산 OT 합계 (가중치 결과): {0:.1f} 시간\n".format(final_ot_total)
+        if holiday_list: 
+            msg += "\n⚠️ [Stand-by 근무여부 확인 필요]\n대상 일자: " + ", ".join(holiday_list)
         self.summary_box.insert("0.0", msg)
 
 if __name__ == "__main__":
