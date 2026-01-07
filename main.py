@@ -10,25 +10,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# 1. 경로 검증 함수
-def check_and_get_resource(relative_path):
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller 임시 폴더 경로
-        base_path = sys._MEIPASS
-    else:
-        # 일반 파이썬 실행 경로
-        base_path = os.path.abspath(".")
-    
-    full_path = os.path.join(base_path, relative_path)
-    exists = os.path.exists(full_path)
-    
-    # 사용자에게 경로 존재 여부를 알림 (검증용)
-    messagebox.showinfo("시스템 진단", 
-                        f"검사 경로: {full_path}\n"
-                        f"파일 존재 여부: {'✅ 찾음' if exists else '❌ 없음'}")
-    return full_path if exists else None
-
-# DPI 설정
+# DPI 인식 설정
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -48,19 +30,14 @@ class OTCalculator(ctk.CTk):
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
-        # 2. 초기화 전 검증 단계
-        config_rel_path = os.path.join("rapidocr_onnxruntime", "config.yaml")
-        verified_path = check_and_get_resource(config_rel_path)
-        
         try:
-            if verified_path:
-                # 확인된 경로로 엔진 초기화
-                self.engine = RapidOCR(config_path=verified_path)
-            else:
-                # 파일이 없을 경우 기본값 시도 (여기서 보통 에러 발생)
-                self.engine = RapidOCR()
+            # ✅ 라이브러리 내부 로직에 맡기되, 빌드 시 모든 파일을 포함시키도록 처리
+            self.engine = RapidOCR()
         except Exception as e:
-            messagebox.showerror("OCR Error", f"엔진 초기화 실패!\n에러 내용: {e}")
+            messagebox.showerror("OCR 엔진 오류", 
+                                f"엔진 초기화에 실패했습니다.\n"
+                                f"원인: {e}\n\n"
+                                f"모든 모델 파일(.onnx)이 포함되었는지 확인이 필요합니다.")
 
         self.setup_ui()
         self.bind('<Control-v>', lambda e: self.paste_from_clipboard())
@@ -106,7 +83,9 @@ class OTCalculator(ctk.CTk):
         try:
             img_np = np.array(img.convert('RGB'))
             result, _ = self.engine(img_np)
-            if not result: return
+            if not result:
+                messagebox.showinfo("알림", "이미지에서 텍스트를 인식하지 못했습니다.")
+                return
 
             result.sort(key=lambda x: x[0][0][1])
             lines = []
@@ -132,6 +111,7 @@ class OTCalculator(ctk.CTk):
 
         for line in lines:
             line_c = line.replace(" ", "")
+            # 날짜 및 시간 정규식 (한/영 공용)
             date_m = re.search(r'(\d{1,2}/\d{1,2})', line_c)
             if not date_m: continue
             
@@ -156,11 +136,10 @@ class OTCalculator(ctk.CTk):
                 except: pass
         
         if not found:
-            messagebox.showinfo("알림", "데이터 추출 실패. 표 형식을 확인해주세요.")
+            messagebox.showinfo("알림", "근무 데이터를 찾지 못했습니다. 표 전체가 보이게 캡처해주세요.")
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
-        is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
         w_name = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
         d_str = f"{dt.strftime('%m/%d')} ({w_name})"
         self.tree.insert("", "end", values=(d_str, f"{s_t}-{e_t}", f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", "", "", "", ""))
