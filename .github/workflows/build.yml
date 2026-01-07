@@ -1,4 +1,4 @@
-name: Build Fixed RapidOCR EXE
+name: Build OT Calculator
 
 on:
   push:
@@ -21,18 +21,16 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # 빌드 도구 최신화
-        pip install pyinstaller
 
-    - name: PyInstaller 빌드 (모든 리소스 강제 포함)
+    - name: PyInstaller 빌드
       run: |
-        # --collect-all 옵션이 RapidOCR의 내부 config.yaml과 모델을 모두 긁어모읍니다.
+        # --collect-all 옵션을 사용하여 설정 파일을 반드시 포함시킵니다.
         pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" `
         --collect-all "rapidocr_onnxruntime" `
         main.py
 
-    - name: 빌드 결과물 업로드
+    - name: 결과물 업로드
       uses: actions/upload-artifact@v4
       with:
-        name: OT_calculator_Fixed
+        name: OT_calculator_Stable
         path: dist/OT_calculator.exe
