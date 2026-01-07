@@ -42,7 +42,7 @@ class OTCalculator(ctk.CTk):
         super().__init__()
         
         self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
-        self.geometry("1600x950")
+        self.geometry("1600(950")
         ctk.set_appearance_mode("light")
         
         self.setup_tesseract()
@@ -67,7 +67,7 @@ class OTCalculator(ctk.CTk):
         
         ctk.CTkLabel(ctrl_frame, text="Year:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=5)
         self.year_var = ctk.StringVar(value=str(datetime.now().year))
-        self.year_dropdown = ctk.CTkComboBox(ctrl_frame, values=["2024", "2025", "2026"], variable=self.year_var, width=90)
+        self.year_dropdown = ctk.CTkComboBox(ctrl_frame, values=["2024", "2025", "2026", "2027"], variable=self.year_var, width=90)
         self.year_dropdown.pack(side="left", padx=5)
         
         self.btn_load = ctk.CTkButton(top_bar, text="📁 Load File", command=self.load_image, width=140)
@@ -86,14 +86,15 @@ class OTCalculator(ctk.CTk):
         self.tree_frame = ctk.CTkFrame(self)
         self.tree_frame.pack(pady=10, fill="both", expand=True, padx=20)
         
+        # 열 제목 간소화: x1.5, x2.0, x2.5
         self.tree = ttk.Treeview(self.tree_frame, 
-                                columns=("Date", "Range", "Break", "NetDiff", "1.5x", "2.0x", "2.5x", "Weighted"), 
+                                columns=("Date", "Range", "Break", "NetDiff", "x1.5", "x2.0", "x2.5", "Weighted"), 
                                 show='headings')
         
         cols = [
             ("Date", "날짜(요일)", 130), ("Range", "근무시간", 160), ("Break", "휴게", 80), 
-            ("NetDiff", "실근무 (+/-)", 110), ("1.5x", "연장/휴일(1.5)", 100), 
-            ("2.0x", "휴일연장(2.0)", 100), ("2.5x", "야간/기타(2.5)", 100), ("Weighted", "환산합계", 100)
+            ("NetDiff", "실근무 (+/-)", 110), ("x1.5", "x1.5 (h)", 100), 
+            ("x2.0", "x2.0 (h)", 100), ("x2.5", "x2.5 (h)", 100), ("Weighted", "환산합계", 100)
         ]
         
         for cid, txt, w in cols:
@@ -102,7 +103,7 @@ class OTCalculator(ctk.CTk):
         
         self.tree.pack(side="left", fill="both", expand=True)
         
-        self.summary_box = ctk.CTkTextbox(self, height=160, font=("Segoe UI", 15))
+        self.summary_box = ctk.CTkTextbox(self, height=180, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
     def show_sample(self):
@@ -125,24 +126,18 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 이미지 전처리: 2배 확대 및 대비 완화 (글자 뭉침 방지)
             w, h = img.size
             img = img.resize((w*2, h*2), Image.Resampling.LANCZOS)
             gray = ImageOps.grayscale(img)
-            enhancer = ImageEnhance.Contrast(gray).enhance(1.8) # 대비를 1.8로 낮춤
-            
-            # 2. 데이터 추출 (PSM 6: 단일 텍스트 블록 가정)
-            # 한국어와 영어를 동시에 인식하도록 설정
+            enhancer = ImageEnhance.Contrast(gray).enhance(1.8)
             full_text = pytesseract.image_to_string(enhancer, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 정규식 개선: 휴게시간 뒤에 명확한 단위(m, min, 분)가 오거나 공백이 있는 숫자만 추출
-        # (\d{2,3}) : 2~3자리 숫자 추출
-        # (?:\s*m|\s*min|\s*분|\s|$) : 단위 또는 공백/줄바꿈 확인
-        pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d{2,3})(?:\s*m|\s*min|\s*분|\s|)', re.S | re.I)
+        # 정규식: 날짜, 시간 범위, 휴게시간(2~3자리)
+        pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d{2,3})', re.S | re.I)
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
@@ -156,64 +151,108 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t, r_raw = match.groups()
-                
-                # [데이터 정제 로직]
-                # 60m가 602로 인식되는 경우(3자리인데 2로 끝남) 보정
-                # 일반적으로 휴게시간은 10분 단위이므로, 3자리면서 끝이 2인 경우 오인식 확률이 높음
                 r_val = int(r_raw)
-                if r_val > 240: # 4시간 이상의 휴게시간은 비정상으로 간주 (보통 60, 90, 120m)
-                    # 끝자리 2를 제거 (602 -> 60, 902 -> 90)
-                    if r_raw.endswith('2') or r_raw.endswith('7'):
-                        r_val = int(r_raw[:-1])
+                # OCR 60m -> 602m 오인식 보정 로직 유지
+                if r_val > 240 and (r_raw.endswith('2') or r_raw.endswith('7')):
+                    r_val = int(r_raw[:-1])
                 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
-                is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
+                is_holiday = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
                 fmt = "%H:%M"
-                start, end = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
-                if end < start: end += timedelta(days=1)
+                start_time = datetime.strptime(s_t, fmt)
+                end_time = datetime.strptime(e_t, fmt)
+                if end_time < start_time: end_time += timedelta(days=1)
                 
-                break_h = r_val / 60
-                net_h = ((end - start).total_seconds() / 3600) - break_h
-                
-                records.append({'dt': dt, 'net': net_h, 'is_h': is_h, 'range': f"{s_t}-{e_t}", 'break': f"{r_val}m"})
+                records.append({
+                    'dt': dt, 'start': start_time, 'end': end_time, 
+                    'break_min': r_val, 'is_h': is_holiday, 'range': f"{s_t}-{e_t}"
+                })
             except: continue
 
         records.sort(key=lambda x: x['dt'])
-        total_weighted_sum = 0
-        total_net_sum = 0
-        has_holiday_work = False
         
+        total_net_sum = 0
+        total_weighted_sum = 0
+        holiday_dates = []
+
         for r in records:
+            # 1분 단위로 정밀 계산 (야간 및 8시간 초과 중첩 계산을 위함)
+            current = r['start']
+            total_minutes = int((r['end'] - r['start']).total_seconds() / 60) - r['break_min']
+            net_h = total_minutes / 60
+            
+            # 배율별 시간 합산 변수
+            h15, h20, h25 = 0, 0, 0
+            base_h = 0
+            
+            # 실근무 시간을 1분씩 순회하며 해당 시점의 배율 판정
+            worked_min = 0
+            temp_time = r['start']
+            
+            # 휴게시간을 제외한 실제 근무 시점별로 가산금 계산
+            # (단순화를 위해 휴게시간은 근무 초반에 소진한 것으로 가정하거나 전체 비율로 계산 가능하나, 
+            # 여기서는 실무적 편의를 위해 누적 근무시간 기준으로 판정)
+            for m in range(int((r['end'] - r['start']).total_seconds() / 60)):
+                # 현재 시각 (시:분)
+                check_time = (temp_time + timedelta(minutes=m))
+                hour_now = check_time.hour
+                
+                # 야간 근로 시간대 판정 (22:00 ~ 06:00)
+                is_night = (hour_now >= 22 or hour_now < 6)
+                
+                # 휴게시간 제외 로직 (전체 시간 중 휴게시간 비율만큼 제외하고 계산)
+                # 정밀도를 위해 휴게시간은 계산에서 제외
+                if m < r['break_min']: continue
+                
+                worked_min += 1
+                is_over_8h = (worked_min > 480) # 8시간(480분) 초과 여부
+                
+                # 근로기준법 배율 판정 매트릭스
+                mult = 1.0
+                if not r['is_h']: # 평일
+                    if is_over_8h and is_night: mult = 2.0
+                    elif is_over_8h or is_night: mult = 1.5
+                    else: mult = 1.0
+                else: # 휴일
+                    if is_over_8h and is_night: mult = 2.5
+                    elif is_over_8h: mult = 2.0
+                    elif is_night: mult = 2.0 # 휴일 야간은 기본 1.5 + 야간 0.5
+                    else: mult = 1.5
+                
+                # 배율별 시간 누적
+                if mult == 1.0: base_h += 1/60
+                elif mult == 1.5: h15 += 1/60
+                elif mult == 2.0: h20 += 1/60
+                elif mult == 2.5: h25 += 1/60
+
+            weighted_day = (base_h * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
+            
             weekday_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
             date_str = f"{r['dt'].strftime('%m/%d')} ({weekday_name})"
+            if r['is_h']: holiday_dates.append(date_str)
             
-            diff = r['net'] - 8
-            diff_display = f"{r['net']:.1f} ({'+' if diff>=0 else ''}{diff:.1f})"
-            
-            m15, m20, m25 = 0, 0, 0
-            if not r['is_h']: # 평일
-                if r['net'] > 8: m15 = r['net'] - 8
-            else: # 휴일
-                has_holiday_work = True
-                m15 = min(8, r['net'])
-                if r['net'] > 8: m20 = r['net'] - 8
-            
-            weighted_day = (r['net'] if not r['is_h'] else 0) + (m15 * 1.5) + (m20 * 2.0)
-            total_weighted_sum += weighted_day
-            total_net_sum += r['net']
+            diff = net_h - 8
+            diff_display = f"{net_h:.1f} ({'+' if diff>=0 else ''}{diff:.1f})"
             
             self.tree.insert("", "end", values=(
-                date_str, r['range'], r['break'], diff_display,
-                f"{m15:.1f}" if m15>0 else "-", f"{m20:.1f}" if m20>0 else "-", "-", f"{weighted_day:.1f}h"
+                date_str, r['range'], f"{r['break_min']}m", diff_display,
+                f"{h15:.1f}" if h15>0 else "-", f"{h20:.1f}" if h20>0 else "-", 
+                f"{h25:.1f}" if h25>0 else "-", f"{weighted_day:.1f}h"
             ))
+            
+            total_net_sum += net_h
+            total_weighted_sum += weighted_day
 
+        # 요약 및 Stand-by 알림 (날짜 포함)
         self.summary_box.delete("0.0", "end")
         summary = f"■ 총 실근무 합계: {total_net_sum:.1f} 시간\n"
-        summary += f"■ 총 환산 OT 합계 (가중치 적용): {total_weighted_sum:.1f} 시간\n"
-        summary += f"■ 정산: {total_net_sum - (len(records)*8):+.1f} 시간 (일별 +/- 상쇄 반영)\n"
-        if has_holiday_work:
-            summary += "\n⚠️ [공휴일/주말 근무 감지] 해당 일자 'Stand-by 근무여부'를 확인하세요."
+        summary += f"■ 총 환산 OT 합계 (법정 가산 반영): {total_weighted_sum:.1f} 시간\n"
+        summary += f"■ 정산: {total_net_sum - (len(records)*8):+.1f} 시간 (일별 상쇄 반영)\n"
+        
+        if holiday_dates:
+            summary += f"\n⚠️ [Stand-by 근무여부 확인 필요]\n대상 일자: {', '.join(holiday_dates)}"
+        
         self.summary_box.insert("0.0", summary)
 
 if __name__ == "__main__":
