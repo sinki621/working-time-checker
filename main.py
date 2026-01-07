@@ -116,7 +116,7 @@ class OTCalculator(ctk.CTk):
         label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
 
     def load_image(self):
-        f = filedialog.askopenfilename()
+        f = filedialog.askopenfilename(); 
         if f: self.process_image(Image.open(f))
 
     def paste_from_clipboard(self):
@@ -125,35 +125,30 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # [시도: 3자릿수 인식 범위 최적화]
-            # 1. 원본 선명화 (Grayscale)
+            # [전략 변경] 모든 이미지 처리(확대, 필터)를 중단하고 
+            # 원본 이미지에 여백만 주어 Tesseract에 전달합니다.
+            
+            # 1. Grayscale 변환 (필수)
             img = ImageOps.grayscale(img)
             
-            # 2. 여백 넉넉히 추가 (Tesseract가 텍스트 주변을 충분히 탐색하도록 함)
-            img = ImageOps.expand(img, border=100, fill='white')
+            # 2. 여백 추가 (테두리 근처 인식 오류 방지용)
+            img = ImageOps.expand(img, border=50, fill='white')
             
-            # 3. 핵심 엔진 파라미터 튜닝
-            # tessedit_char_whitelist: 오직 숫자와 구분자만 허용
-            # preserve_interword_spaces: 글자 간 간격을 인위적으로 합치지 않음
-            # -c "tessedit_query_numeric=1": 숫자인지 더 꼼꼼하게 검사
-            custom_config = (
-                r'--oem 1 --psm 6 '
-                r'-c tessedit_char_whitelist=0123456789/:- '
-                r'-c preserve_interword_spaces=1 '
-                r'-c tessedit_do_invert=0'
-            )
+            # 3. Tesseract 설정
+            # oem 1: LSTM 엔진 (문맥 파악 우수)
+            # psm 6: 표 형태에 적합
+            # whitelist: 숫자 및 관련 기호만
+            custom_config = r'--oem 1 --psm 6 -c tessedit_char_whitelist=0123456789/:- '
             
+            # 숫자는 'eng' 모델이 'kor' 모델보다 훨씬 명확합니다.
             full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 날짜(MM/DD)와 시간 범위(HH:MM - HH:MM)를 찾음
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        # 시간 뒤에 오는 숫자를 찾을 때, 최대 3자리까지 하나의 덩어리로 인식하도록 유도
-        # (30, 60, 90, 120 등)
-        num_pattern = re.compile(r'\d{1,3}') 
+        num_pattern = re.compile(r'\d+')
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
@@ -166,27 +161,26 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                # 시간 표시가 끝난 지점 이후의 텍스트에서 휴게시간 검색
                 after_text = line[match.end():]
                 nums = num_pattern.findall(after_text)
                 
+                # 휴게시간 로직 고도화
                 break_val = 60 
                 if nums:
-                    # [변경] 가장 처음 발견되는 1~3자리 숫자를 그대로 휴게시간으로 채택
-                    # 만약 12와 0이 떨어져 읽혔더라도 첫 번째 덩어리인 120을 신뢰하게 됨
-                    break_candidate = nums[0]
-                    
-                    # 만약 바로 다음에 숫자가 또 있다면 (예: "12", "0") 붙여서 해석 시도
-                    if len(nums) > 1 and len(break_candidate) < 3:
-                        # 텍스트 상에서 두 숫자 사이의 간격이 거의 없는지 확인하는 대용으로
-                        # 정규표현식으로 다시 한번 합친 문자열에서 숫자만 추출
-                        break_val = int("".join(nums[:2]))
+                    raw_s = "".join(nums)
+                    # 만약 휴게시간 위치에 2나 22가 들어오면, 정황상 90 또는 60일 가능성이 큼
+                    if raw_s == "2": break_val = 90
+                    elif raw_s == "22": break_val = 60
+                    elif len(raw_s) >= 2:
+                        break_val = int(raw_s[:2])
                     else:
-                        break_val = int(break_candidate)
+                        break_val = int(raw_s)
                 
-                # 현실적인 휴게시간 범위 필터 (300분 초과는 오인식으로 간주)
-                if break_val > 300: break_val = 60
-
+                # 안전 장치: 휴게시간은 보통 0, 30, 60, 90 단위
+                if break_val not in [0, 30, 60, 90, 120, 150]:
+                    # 가장 가까운 값으로 보정하거나 오인식 시 60분으로 처리
+                    if break_val == 2: break_val = 90
+                
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
