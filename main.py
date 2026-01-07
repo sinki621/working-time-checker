@@ -79,9 +79,15 @@ class OTCalculator(ctk.CTk):
         self.btn_sample = ctk.CTkButton(top_bar, text="💡 Sample", command=self.show_sample, fg_color="#3498db", width=120)
         self.btn_sample.pack(side="right", padx=10)
 
+        # [변경 사항] 표의 행 간격 겹침 방지를 위해 rowheight를 충분히 확보 (40)
         style = ttk.Style()
-        style.configure("Treeview", rowheight=30, font=("Segoe UI", 10))
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        style.theme_use("default") 
+        style.configure("Treeview", 
+                        rowheight=40, 
+                        font=("Segoe UI", 11),
+                        background="#ffffff",
+                        fieldbackground="#ffffff")
+        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
         
         self.tree_frame = ctk.CTkFrame(self)
         self.tree_frame.pack(pady=10, fill="both", expand=True, padx=20)
@@ -91,8 +97,8 @@ class OTCalculator(ctk.CTk):
                                 show='headings')
         
         cols = [
-            ("Date", "날짜(요일)", 130), ("Range", "근무시간", 160), ("Break", "휴게", 80), 
-            ("NetDiff", "실근무 (+/-)", 110), ("x1.5", "x1.5", 100), 
+            ("Date", "날짜(요일)", 130), ("Range", "근무시간", 180), ("Break", "휴게(역산)", 100), 
+            ("NetDiff", "실근무 (+/-)", 130), ("x1.5", "x1.5", 100), 
             ("x2.0", "x2.0", 100), ("x2.5", "x2.5", 100), ("Weighted", "환산합계", 100)
         ]
         
@@ -116,7 +122,7 @@ class OTCalculator(ctk.CTk):
         label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
 
     def load_image(self):
-        f = filedialog.askopenfilename(); 
+        f = filedialog.askopenfilename()
         if f: self.process_image(Image.open(f))
 
     def paste_from_clipboard(self):
@@ -125,30 +131,21 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # [전략 변경] 모든 이미지 처리(확대, 필터)를 중단하고 
-            # 원본 이미지에 여백만 주어 Tesseract에 전달합니다.
-            
-            # 1. Grayscale 변환 (필수)
             img = ImageOps.grayscale(img)
-            
-            # 2. 여백 추가 (테두리 근처 인식 오류 방지용)
             img = ImageOps.expand(img, border=50, fill='white')
             
-            # 3. Tesseract 설정
-            # oem 1: LSTM 엔진 (문맥 파악 우수)
-            # psm 6: 표 형태에 적합
-            # whitelist: 숫자 및 관련 기호만
-            custom_config = r'--oem 1 --psm 6 -c tessedit_char_whitelist=0123456789/:- '
-            
-            # 숫자는 'eng' 모델이 'kor' 모델보다 훨씬 명확합니다.
-            full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
+            # 한글 인식도 중요하므로 kor+eng 사용
+            custom_config = r'--oem 1 --psm 6'
+            full_text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
+        # 1. 날짜 및 근무시간 범위 추출 패턴
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        num_pattern = re.compile(r'\d+')
+        # 2. 총 시간(역산용) 추출 패턴: "18시간 50분" 또는 "9시간 7분" 형태
+        total_time_pattern = re.compile(r'(\d{1,2})시간\s*(\d{1,2})?분?')
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
@@ -161,32 +158,31 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                after_text = line[match.end():]
-                nums = num_pattern.findall(after_text)
                 
-                # 휴게시간 로직 고도화
-                break_val = 60 
-                if nums:
-                    raw_s = "".join(nums)
-                    # 만약 휴게시간 위치에 2나 22가 들어오면, 정황상 90 또는 60일 가능성이 큼
-                    if raw_s == "2": break_val = 90
-                    elif raw_s == "22": break_val = 60
-                    elif len(raw_s) >= 2:
-                        break_val = int(raw_s[:2])
-                    else:
-                        break_val = int(raw_s)
-                
-                # 안전 장치: 휴게시간은 보통 0, 30, 60, 90 단위
-                if break_val not in [0, 30, 60, 90, 120, 150]:
-                    # 가장 가까운 값으로 보정하거나 오인식 시 60분으로 처리
-                    if break_val == 2: break_val = 90
-                
-                dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
-                is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
-                
+                # 근무 시간차(Range Duration) 계산
                 fmt = "%H:%M"
                 st, et = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
                 if et < st: et += timedelta(days=1)
+                range_minutes = int((et - st).total_seconds() / 60)
+                
+                # [핵심] 총 시간(실근무) 역산 로직
+                after_text = line[match.end():]
+                total_match = total_time_pattern.search(after_text)
+                
+                if total_match:
+                    h_val = int(total_match.group(1))
+                    m_val = int(total_match.group(2)) if total_match.group(2) else 0
+                    actual_worked_minutes = (h_val * 60) + m_val
+                    
+                    # 휴게시간 = (출퇴근 시간차) - (이미지에 찍힌 총 시간)
+                    break_val = range_minutes - actual_worked_minutes
+                    # 음수 발생 시(인식 오류) 기본값 60분 처리
+                    if break_val < 0: break_val = 60
+                else:
+                    break_val = 60 # 총 시간 인식 실패 시 기본값
+                
+                dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
+                is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
                 records.append({'dt': dt, 'st': st, 'et': et, 'brk': break_val, 'is_h': is_h, 'range': f"{s_t}-{e_t}"})
             except: continue
