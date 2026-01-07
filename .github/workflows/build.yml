@@ -1,4 +1,4 @@
-name: Build CSV Chart Viewer
+name: Build OTCalculator Fixed
 
 on: 
   push:
@@ -18,28 +18,21 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install Tesseract Engine
-      run: choco install tesseract-ocr -y
-    
     - name: Install Dependencies
       run: |
+        choco install tesseract-ocr -y
         python -m pip install --upgrade pip
         pip install customtkinter Pillow pytesseract holidays pyinstaller
     
-    - name: Prepare Assets
+    - name: Prepare Resources
       shell: pwsh
       run: |
-        # Tesseract 엔진 복사
-        $installPath = "C:\Program Files\Tesseract-OCR"
+        $tessPath = "C:\Program Files\Tesseract-OCR"
         New-Item -ItemType Directory -Force -Path "Tesseract-OCR"
-        xcopy "$installPath\*" "Tesseract-OCR\" /E /H /Y /I
-        
-        # sample.png가 없는 경우를 대비해 체크 (에러 방지)
-        if (!(Test-Path "sample.png")) {
-           Write-Host "Warning: sample.png not found. Please ensure it exists in root."
-        }
+        xcopy "$tessPath\*" "Tesseract-OCR\" /E /H /Y /I
+        if (Test-Path "sample.png") { copy "sample.png" "dist/" }
 
-    - name: Build EXE
+    - name: PyInstaller Build
       shell: pwsh
       run: |
         pyinstaller --noconfirm --onefile --windowed `
@@ -48,10 +41,10 @@ jobs:
           --collect-all customtkinter `
           --collect-all holidays `
           --hidden-import "holidays.countries.korea" `
-          --name "OTCalculator_KISHIN" main.py
+          --name "OTCalculator_KISHIN_Fixed" main.py
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: CSV_Chart_Viewer_Win
-        path: dist/OTCalculator_KISHIN.exe
+        name: OTCalculator_Final
+        path: dist/OTCalculator_KISHIN_Fixed.exe
