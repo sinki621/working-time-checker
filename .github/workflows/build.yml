@@ -1,4 +1,4 @@
-name: Build CSV Chart Viewer
+name: Build OT calculator
 
 on: 
   push:
@@ -48,10 +48,10 @@ jobs:
           --collect-all customtkinter `
           --collect-all holidays `
           --hidden-import "holidays.countries.korea" `
-          --name "OTCalculator_KI.SHIN" main.py
+          --name "OTCalculator_KISHIN" main.py
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: OT_Calculator
-        path: dist/OT_Calculator.exe
+        path: dist/OTCalculator_KISHIN.exe
