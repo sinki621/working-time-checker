@@ -53,6 +53,7 @@ class OTCalculator(ctk.CTk):
         self.bind('<Control-V>', lambda e: self.paste_from_clipboard())
 
     def setup_tesseract(self):
+        # Tesseract 경로 설정
         engine_root = resource_path("Tesseract-OCR")
         tesseract_exe = os.path.join(engine_root, "tesseract.exe")
         if os.path.exists(tesseract_exe):
@@ -77,11 +78,12 @@ class OTCalculator(ctk.CTk):
         self.btn_paste = ctk.CTkButton(top_bar, text="📋 Paste (Ctrl+V)", command=self.paste_from_clipboard, fg_color="#2ecc71", width=160)
         self.btn_paste.pack(side="left", padx=10)
         
+        # 에러 발생 지점 수정: command=self.show_sample로 명확히 지정
         self.btn_sample = ctk.CTkButton(top_bar, text="💡 Sample", command=self.show_sample, fg_color="#3498db", width=120)
         self.btn_sample.pack(side="right", padx=10)
 
-        # 폰트에 따른 동적 행 높이 설정 (겹침 방지)
-        tree_font = Font(family="Segoe UI", size=13)
+        # 행 높이 동적 계산 (폰트 크기에 연동하여 겹침 방지)
+        tree_font = Font(family="Segoe UI", size=11)
         calculated_row_height = int(tree_font.metrics('linespace') * 2.5)
 
         style = ttk.Style()
@@ -106,6 +108,7 @@ class OTCalculator(ctk.CTk):
         
         scrollbar.config(command=self.tree.yview)
 
+        # 열 설정: 실근무(총시간)를 중심으로 재편성
         cols = [
             ("Date", "날짜(요일)", 130), ("Range", "근무시간 범위", 180), 
             ("NetTime", "실근무(총시간)", 130), ("Break", "휴게(역산)", 100), 
@@ -121,6 +124,18 @@ class OTCalculator(ctk.CTk):
         self.summary_box = ctk.CTkTextbox(self, height=260, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
+    def show_sample(self):
+        # 에러 해결을 위해 메서드 추가
+        sample_path = resource_path("sample.png")
+        if not os.path.exists(sample_path):
+            messagebox.showinfo("Notice", "sample.png 파일이 리소스 폴더에 없습니다.")
+            return
+        top = ctk.CTkToplevel(self)
+        top.title("Sample Image")
+        img = Image.open(sample_path)
+        img_tk = ImageTk.PhotoImage(img)
+        label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
+
     def load_image(self):
         f = filedialog.askopenfilename()
         if f: self.process_image(Image.open(f))
@@ -133,7 +148,7 @@ class OTCalculator(ctk.CTk):
         try:
             img = ImageOps.grayscale(img)
             img = ImageOps.expand(img, border=50, fill='white')
-            # 텍스트 형태 보존을 위해 psm 6 사용
+            # 한글/영어 혼용 모드 (총 시간 인식을 위함)
             custom_config = r'--oem 1 --psm 6'
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
             self.calculate_data(full_text)
@@ -141,7 +156,7 @@ class OTCalculator(ctk.CTk):
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 정규표현식 보강: '시간' 앞의 숫자를 정확히 캡처
+        # 시간 범위 및 '총 시간' 추출 패턴 정교화
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
         total_time_pattern = re.compile(r'(\d{1,2})\s*시간\s*(?:(\d{1,2})\s*분)?')
         
@@ -160,10 +175,8 @@ class OTCalculator(ctk.CTk):
                 st, et = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
                 if et < st: et += timedelta(days=1)
                 
-                # 1. 출퇴근 시간 차이(분)
                 range_minutes = int((et - st).total_seconds() / 60)
                 
-                # 2. 이미지에서 인식된 '총 시간' 추출
                 after_text = line[match.end():]
                 total_match = total_time_pattern.search(after_text)
                 
@@ -171,10 +184,9 @@ class OTCalculator(ctk.CTk):
                     h_val = int(total_match.group(1))
                     m_val = int(total_match.group(2)) if total_match.group(2) else 0
                     actual_worked_minutes = (h_val * 60) + m_val
-                    # 역산된 휴게시간
+                    # 역산 로직: 출퇴근 차이 - 실근무(총시간) = 휴게시간
                     break_val = range_minutes - actual_worked_minutes
                 else:
-                    # 인식 실패 시 기본 휴게 60분 적용
                     break_val = 60
                     actual_worked_minutes = range_minutes - break_val
                 
@@ -195,13 +207,11 @@ class OTCalculator(ctk.CTk):
 
         for r in records:
             h10, h15, h20, h25 = 0, 0, 0, 0
-            # 가중치 계산 루프: 역산된 휴게시간(brk)을 정확히 제외하고 루프 시작
             dur = int((r['et'] - r['st']).total_seconds() / 60)
             worked_min_count = 0
             
             for m in range(dur):
-                # 출근 시점부터 휴게시간만큼은 가중치 계산에서 제외
-                if m < r['brk']: continue
+                if m < r['brk']: continue # 역산된 휴게시간 정확히 제외
                 
                 check = r['st'] + timedelta(minutes=m)
                 is_n = (check.hour >= 22 or check.hour < 6)
@@ -231,7 +241,6 @@ class OTCalculator(ctk.CTk):
             d_str = f"{r['dt'].strftime('%m/%d')} ({w_name})"
             if r['is_h']: holiday_list.append(d_str)
             
-            # 출력 형식: 이미지와 동일하게 'Xh Xm'으로 표기
             net_display = f"{int(r['net_min']//60)}h {int(r['net_min']%60)}m"
             
             self.tree.insert("", "end", values=(
