@@ -11,7 +11,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# DPI 설정 (고해상도 대응)
+# DPI 설정
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -32,7 +32,6 @@ class OTCalculator(ctk.CTk):
         ctk.set_appearance_mode("light")
         
         try:
-            # 별도 설정 없이도 --collect-all로 포함된 리소스를 자동 참조합니다.
             self.engine = RapidOCR()
         except Exception as e:
             messagebox.showerror("OCR Error", f"엔진 초기화 실패: {e}")
@@ -45,7 +44,7 @@ class OTCalculator(ctk.CTk):
         top_bar = ctk.CTkFrame(self, fg_color="transparent")
         top_bar.pack(pady=15, fill="x", padx=20)
         
-        self.year_var = ctk.StringVar(value="2024")
+        self.year_var = ctk.StringVar(value="2026") # 연도 업데이트
         ctk.CTkLabel(top_bar, text="Year:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=5)
         ctk.CTkComboBox(top_bar, values=["2024", "2025", "2026", "2027"], variable=self.year_var, width=90).pack(side="left", padx=5)
         
@@ -69,18 +68,21 @@ class OTCalculator(ctk.CTk):
         self.summary_box = ctk.CTkTextbox(self, height=180, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
-    def preprocess_image(self, pil_img):
-        # 1. OpenCV 변환 및 1.5배 확대
-        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_LANCZOS4)
-        
-        # 2. 그레이스케일 및 샤프닝 (글자 테두리 강조)
+    # --- 알고리즘 A: 영어 전용 (선명도 위주) ---
+    def preprocess_eng(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        sharpened = cv2.filter2D(gray, -1, kernel)
-        
-        # 3. 대비 조절 (밝은 부분은 더 밝게, 어두운 글자는 더 어둡게)
-        return sharpened
+        sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        return cv2.filter2D(gray, -1, sharpen_kernel)
+
+    # --- 알고리즘 B: 한글 전용 (획 분리 위주) ---
+    def preprocess_kor(self, img):
+        # 2배 확대하여 획 사이 간격 확보
+        resized = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        # 가우시안 블러로 노이즈 억제
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        # 적응형 이진화로 획 윤곽 추출
+        return cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
 
     def load_image(self):
         f = filedialog.askopenfilename()
@@ -90,20 +92,37 @@ class OTCalculator(ctk.CTk):
         img = ImageGrab.grabclipboard()
         if isinstance(img, Image.Image): self.process_image(img)
 
-    def process_image(self, img):
+    def process_image(self, pil_img):
         try:
-            processed = self.preprocess_image(img)
+            img_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            
+            # 1. 언어 판별을 위한 1차 스캔 (Raw)
+            raw_res, _ = self.engine(img_cv)
+            full_text = "".join([r[1] for r in raw_res]) if raw_res else ""
+            
+            # 한글 포함 여부 확인
+            has_korean = bool(re.search('[가-힣]', full_text))
+            
+            # 2. 결과에 따른 최적 알고리즘 적용
+            if has_korean:
+                processed = self.preprocess_kor(img_cv)
+                y_threshold = 50 # 확대되었으므로 줄 구분 오차 크게
+            else:
+                processed = self.preprocess_eng(img_cv)
+                y_threshold = 25
+            
+            # 3. 2차 정밀 OCR 실행
             result, _ = self.engine(processed)
             if not result: return
 
-            # Y좌표 정렬 (확대 감안 오차 40px)
+            # Y좌표 정렬 및 행 병합
             result.sort(key=lambda x: x[0][0][1])
             lines_data = []
             if result:
                 last_y = result[0][0][0][1]
                 current_line = []
                 for res in result:
-                    if abs(res[0][0][1] - last_y) < 40:
+                    if abs(res[0][0][1] - last_y) < y_threshold:
                         current_line.append(res)
                     else:
                         current_line.sort(key=lambda x: x[0][0][0])
@@ -123,28 +142,25 @@ class OTCalculator(ctk.CTk):
         
         for elements in lines_data:
             line_full = "".join(elements).replace(" ", "")
-            
-            # 날짜(MM/DD)와 시간범위(HH:MM) 검색
             date_m = re.search(r'(\d{1,2}/\d{1,2})', line_full)
             times = re.findall(r'\d{2}:\d{2}', line_full)
             if not date_m or len(times) < 2: continue
             
             f_net = 0
-            # 1순위: 텍스트 기반 추출 (한글/영문 키워드)
             for elem in reversed(elements):
                 elem_c = elem.replace(" ", "")
+                # 한글 오인식(분->준/문/루) 방어 코드 포함
                 h_m = re.search(r'(\d+)(?:시간|시|h|H)', elem_c)
-                m_m = re.search(r'(\d+)(?:분|준|문|m|M)', elem_c)
+                m_m = re.search(r'(\d+)(?:분|준|문|루|m|M)', elem_c)
                 if h_m or m_m:
                     f_net = (int(h_m.group(1)) if h_m else 0) * 60 + (int(m_m.group(1)) if m_m else 0)
                     if f_net > 0: break
             
-            # 2순위: 텍스트가 뭉개졌을 경우 마지막 숫자 뭉치 두 개를 강제 추출
+            # 텍스트 인식 실패 시 숫자 위치 기반 추적
             if f_net == 0:
                 nums = re.findall(r'\d+', line_full)
-                if len(nums) >= 6: # 날짜(2) + 시간(4) 외에 숫자가 더 있을 때
+                if len(nums) >= 6:
                     try:
-                        # 끝에서부터 읽어서 '분'이 60 미만인 쌍을 찾음
                         for i in range(len(nums)-1, 4, -1):
                             if int(nums[i]) < 60:
                                 f_net = int(nums[i-1]) * 60 + int(nums[i])
