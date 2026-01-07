@@ -123,34 +123,26 @@ class OTCalculator(ctk.CTk):
         img = ImageGrab.grabclipboard()
         if isinstance(img, Image.Image): self.process_image(img)
 
-    def clean_ocr_number(self, num_str):
-        """OCR 오타 교정: O -> 0, I -> 1, S -> 5 등"""
-        table = str.maketrans('OIStZB', '015728')
-        clean = num_str.translate(table)
-        return re.sub(r'[^0-9]', '', clean)
-
     def process_image(self, img):
         try:
-            # 1. 이미지 전처리 강화: 2배 확대 및 대비 최적화
+            # 1. 이미지 전처리: 2배 확대 및 대비 완화 (글자 뭉침 방지)
             w, h = img.size
             img = img.resize((w*2, h*2), Image.Resampling.LANCZOS)
             gray = ImageOps.grayscale(img)
-            enhancer = ImageEnhance.Contrast(gray).enhance(2.5)
+            enhancer = ImageEnhance.Contrast(gray).enhance(1.8) # 대비를 1.8로 낮춤
             
-            # 2. 언어 감지
-            test_scan = pytesseract.image_to_string(enhancer, lang='kor+eng', config='--psm 3')
-            target_lang = 'kor' if any(x in test_scan for x in ['날짜', '근무', '휴게', '시간']) else 'eng'
-            
-            # 3. 데이터 추출 (줄 단위 PSM 6 설정)
-            full_text = pytesseract.image_to_string(enhancer, lang=f'{target_lang}+eng', config='--psm 6')
+            # 2. 데이터 추출 (PSM 6: 단일 텍스트 블록 가정)
+            # 한국어와 영어를 동시에 인식하도록 설정
+            full_text = pytesseract.image_to_string(enhancer, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 정규식 개선: 날짜, 시간, 그리고 숫자로 된 휴게시간을 더 유연하게 매칭
-        # (\d{1,3}) 부분에서 3자리수 휴게시간을 명확히 잡음
-        pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d{1,3})', re.S | re.I)
+        # 정규식 개선: 휴게시간 뒤에 명확한 단위(m, min, 분)가 오거나 공백이 있는 숫자만 추출
+        # (\d{2,3}) : 2~3자리 숫자 추출
+        # (?:\s*m|\s*min|\s*분|\s|$) : 단위 또는 공백/줄바꿈 확인
+        pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d{2,3})(?:\s*m|\s*min|\s*분|\s|)', re.S | re.I)
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
@@ -165,24 +157,26 @@ class OTCalculator(ctk.CTk):
             try:
                 d_v, s_t, e_t, r_raw = match.groups()
                 
-                # 휴게시간 오타 교정
-                r_v = self.clean_ocr_number(r_raw)
-                if not r_v: continue
+                # [데이터 정제 로직]
+                # 60m가 602로 인식되는 경우(3자리인데 2로 끝남) 보정
+                # 일반적으로 휴게시간은 10분 단위이므로, 3자리면서 끝이 2인 경우 오인식 확률이 높음
+                r_val = int(r_raw)
+                if r_val > 240: # 4시간 이상의 휴게시간은 비정상으로 간주 (보통 60, 90, 120m)
+                    # 끝자리 2를 제거 (602 -> 60, 902 -> 90)
+                    if r_raw.endswith('2') or r_raw.endswith('7'):
+                        r_val = int(r_raw[:-1])
                 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
-                # 시간 계산
                 fmt = "%H:%M"
                 start, end = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
                 if end < start: end += timedelta(days=1)
                 
-                # 휴게시간(분) -> 시간(h) 변환
-                break_min = int(r_v)
-                break_h = break_min / 60
-                
+                break_h = r_val / 60
                 net_h = ((end - start).total_seconds() / 3600) - break_h
-                records.append({'dt': dt, 'net': net_h, 'is_h': is_h, 'range': f"{s_t}-{e_t}", 'break': f"{break_min}m"})
+                
+                records.append({'dt': dt, 'net': net_h, 'is_h': is_h, 'range': f"{s_t}-{e_t}", 'break': f"{r_val}m"})
             except: continue
 
         records.sort(key=lambda x: x['dt'])
