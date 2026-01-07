@@ -1,6 +1,6 @@
+opencv-python
 rapidocr_onnxruntime
 customtkinter
 Pillow
 numpy
 holidays
-pyinstaller
