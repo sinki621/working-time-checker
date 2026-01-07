@@ -44,7 +44,7 @@ class OTCalculator(ctk.CTk):
         top_bar = ctk.CTkFrame(self, fg_color="transparent")
         top_bar.pack(pady=15, fill="x", padx=20)
         
-        self.year_var = ctk.StringVar(value="2026") # 연도 업데이트
+        self.year_var = ctk.StringVar(value="2026")
         ctk.CTkLabel(top_bar, text="Year:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=5)
         ctk.CTkComboBox(top_bar, values=["2024", "2025", "2026", "2027"], variable=self.year_var, width=90).pack(side="left", padx=5)
         
@@ -68,21 +68,116 @@ class OTCalculator(ctk.CTk):
         self.summary_box = ctk.CTkTextbox(self, height=180, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
-    # --- 알고리즘 A: 영어 전용 (선명도 위주) ---
-    def preprocess_eng(self, img):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        return cv2.filter2D(gray, -1, sharpen_kernel)
+    # --- 개선된 한글 전처리 알고리즘 ---
+    def preprocess_korean_optimized(self, img):
+        """
+        한글 인식 최적화 전처리
+        - 적당한 확대 (1.5배)
+        - 대비 향상
+        - 노이즈 제거
+        - 선명화
+        """
+        # 1. 적당한 크기 확대 (너무 크면 오히려 역효과)
+        resized = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        
+        # 2. 그레이스케일 변환
+        if len(resized.shape) == 3:
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = resized
+        
+        # 3. 노이즈 제거 (Non-local Means Denoising)
+        denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
+        
+        # 4. 대비 향상 (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        contrast = clahe.apply(denoised)
+        
+        # 5. 가벼운 선명화
+        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        sharpened = cv2.filter2D(contrast, -1, kernel)
+        
+        # 6. 이진화 (Otsu 방법)
+        _, binary = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        return binary
 
-    # --- 알고리즘 B: 한글 전용 (획 분리 위주) ---
-    def preprocess_kor(self, img):
-        # 2배 확대하여 획 사이 간격 확보
-        resized = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        # 가우시안 블러로 노이즈 억제
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        # 적응형 이진화로 획 윤곽 추출
-        return cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    # --- 개선된 영어 전처리 알고리즘 ---
+    def preprocess_english_optimized(self, img):
+        """
+        영어 인식 최적화 전처리
+        - 선명도 위주
+        - 가벼운 전처리
+        """
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+        
+        # 노이즈 제거
+        denoised = cv2.fastNlMeansDenoising(gray, None, h=7)
+        
+        # 선명화
+        sharpen_kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(denoised, -1, sharpen_kernel)
+        
+        # 이진화
+        _, binary = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        return binary
+
+    # --- Multi-pass OCR 전략 ---
+    def multi_pass_ocr(self, img_cv):
+        """
+        여러 전처리 방법을 시도하여 최상의 결과 선택
+        """
+        results = []
+        
+        # Pass 1: 원본
+        try:
+            res1, _ = self.engine(img_cv)
+            if res1:
+                results.append(('original', res1, len(res1)))
+        except:
+            pass
+        
+        # Pass 2: 한글 최적화
+        try:
+            processed_kor = self.preprocess_korean_optimized(img_cv)
+            res2, _ = self.engine(processed_kor)
+            if res2:
+                results.append(('korean', res2, len(res2)))
+        except:
+            pass
+        
+        # Pass 3: 영어 최적화
+        try:
+            processed_eng = self.preprocess_english_optimized(img_cv)
+            res3, _ = self.engine(processed_eng)
+            if res3:
+                results.append(('english', res3, len(res3)))
+        except:
+            pass
+        
+        # Pass 4: 간단한 그레이스케일 + 이진화
+        try:
+            if len(img_cv.shape) == 3:
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = img_cv
+            _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+            res4, _ = self.engine(binary)
+            if res4:
+                results.append(('simple', res4, len(res4)))
+        except:
+            pass
+        
+        # 가장 많은 텍스트를 인식한 결과 선택
+        if not results:
+            return None, 'none'
+        
+        best = max(results, key=lambda x: x[2])
+        return best[1], best[0]
 
     def load_image(self):
         f = filedialog.askopenfilename()
@@ -96,31 +191,27 @@ class OTCalculator(ctk.CTk):
         try:
             img_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
             
-            # 1. 언어 판별을 위한 1차 스캔 (Raw)
-            raw_res, _ = self.engine(img_cv)
-            full_text = "".join([r[1] for r in raw_res]) if raw_res else ""
+            # Multi-pass OCR 전략 사용
+            result, method = self.multi_pass_ocr(img_cv)
             
-            # 한글 포함 여부 확인
-            has_korean = bool(re.search('[가-힣]', full_text))
+            if not result:
+                messagebox.showwarning("OCR 실패", "텍스트를 인식할 수 없습니다.")
+                return
             
-            # 2. 결과에 따른 최적 알고리즘 적용
-            if has_korean:
-                processed = self.preprocess_kor(img_cv)
-                y_threshold = 50 # 확대되었으므로 줄 구분 오차 크게
-            else:
-                processed = self.preprocess_eng(img_cv)
-                y_threshold = 25
+            print(f"[OCR] 선택된 방법: {method}, 인식된 텍스트 블록: {len(result)}개")
             
-            # 3. 2차 정밀 OCR 실행
-            result, _ = self.engine(processed)
-            if not result: return
-
-            # Y좌표 정렬 및 행 병합
+            # Y좌표 정렬 및 행 병합 (개선된 threshold)
             result.sort(key=lambda x: x[0][0][1])
             lines_data = []
+            
             if result:
+                # 동적 threshold 계산 (이미지 높이의 2%)
+                img_height = img_cv.shape[0]
+                y_threshold = max(15, int(img_height * 0.02))
+                
                 last_y = result[0][0][0][1]
                 current_line = []
+                
                 for res in result:
                     if abs(res[0][0][1] - last_y) < y_threshold:
                         current_line.append(res)
@@ -129,32 +220,48 @@ class OTCalculator(ctk.CTk):
                         lines_data.append([el[1] for el in current_line])
                         current_line = [res]
                         last_y = res[0][0][1]
+                
                 current_line.sort(key=lambda x: x[0][0][0])
                 lines_data.append([el[1] for el in current_line])
 
             self.parse_rows(lines_data)
+            
         except Exception as e:
             messagebox.showerror("Error", f"분석 오류: {e}")
+            import traceback
+            traceback.print_exc()
 
     def parse_rows(self, lines_data):
-        for item in self.tree.get_children(): self.tree.delete(item)
+        for item in self.tree.get_children(): 
+            self.tree.delete(item)
+        
         year = int(self.year_var.get())
         
         for elements in lines_data:
             line_full = "".join(elements).replace(" ", "")
-            date_m = re.search(r'(\d{1,2}/\d{1,2})', line_full)
-            times = re.findall(r'\d{2}:\d{2}', line_full)
-            if not date_m or len(times) < 2: continue
             
+            # 날짜 패턴 매칭
+            date_m = re.search(r'(\d{1,2}/\d{1,2})', line_full)
+            
+            # 시간 패턴 매칭
+            times = re.findall(r'\d{2}:\d{2}', line_full)
+            
+            if not date_m or len(times) < 2: 
+                continue
+            
+            # 실근무 시간 추출 (개선된 패턴)
             f_net = 0
             for elem in reversed(elements):
                 elem_c = elem.replace(" ", "")
-                # 한글 오인식(분->준/문/루) 방어 코드 포함
-                h_m = re.search(r'(\d+)(?:시간|시|h|H)', elem_c)
-                m_m = re.search(r'(\d+)(?:분|준|문|루|m|M)', elem_c)
+                
+                # 한글 패턴 (오인식 대응 강화)
+                h_m = re.search(r'(\d+)(?:시간|시|h|H|흐)', elem_c)
+                m_m = re.search(r'(\d+)(?:분|준|문|루|푼|본|m|M)', elem_c)
+                
                 if h_m or m_m:
                     f_net = (int(h_m.group(1)) if h_m else 0) * 60 + (int(m_m.group(1)) if m_m else 0)
-                    if f_net > 0: break
+                    if f_net > 0: 
+                        break
             
             # 텍스트 인식 실패 시 숫자 위치 기반 추적
             if f_net == 0:
@@ -162,22 +269,29 @@ class OTCalculator(ctk.CTk):
                 if len(nums) >= 6:
                     try:
                         for i in range(len(nums)-1, 4, -1):
-                            if int(nums[i]) < 60:
+                            if int(nums[i]) < 60 and int(nums[i-1]) < 24:
                                 f_net = int(nums[i-1]) * 60 + int(nums[i])
                                 break
-                    except: pass
+                    except: 
+                        pass
 
             if f_net > 0:
                 try:
                     st_s, et_s = times[0], times[1]
                     st = datetime.strptime(st_s, "%H:%M")
                     et = datetime.strptime(et_s, "%H:%M")
-                    if et < st: et += timedelta(days=1)
+                    if et < st: 
+                        et += timedelta(days=1)
+                    
                     range_min = int((et-st).total_seconds()/60)
                     brk = max(0, range_min - f_net)
                     dt = datetime.strptime(f"{year}/{date_m.group(1)}", "%Y/%m/%d")
+                    
                     self.insert_row(dt, st_s, et_s, f_net, brk)
-                except: pass
+                except Exception as e:
+                    print(f"[파싱 오류] {line_full}: {e}")
+                    pass
+        
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
@@ -188,36 +302,61 @@ class OTCalculator(ctk.CTk):
     def recalculate_from_table(self):
         total_net, sum15, sum20, sum25, total_minus = 0, 0, 0, 0, 0
         year = int(self.year_var.get())
+        
         for item in self.tree.get_children():
             v = self.tree.item(item, 'values')
             dt = datetime.strptime(f"{year}/{v[0].split(' ')[0]}", "%Y/%m/%d")
             st_s, et_s = v[1].split('-')
-            st = datetime.strptime(st_s, "%H:%M"); et = datetime.strptime(et_s, "%H:%M")
-            if et < st: et += timedelta(days=1)
-            h_m = re.search(r'(\d+)h', v[2]); m_m = re.search(r'(\d+)m', v[2])
+            st = datetime.strptime(st_s, "%H:%M")
+            et = datetime.strptime(et_s, "%H:%M")
+            if et < st: 
+                et += timedelta(days=1)
+            
+            h_m = re.search(r'(\d+)h', v[2])
+            m_m = re.search(r'(\d+)m', v[2])
             net_min = (int(h_m.group(1))*60 if h_m else 0) + (int(m_m.group(1)) if m_m else 0)
-            range_min = int((et-st).total_seconds()/60); brk = range_min - net_min
+            range_min = int((et-st).total_seconds()/60)
+            brk = range_min - net_min
+            
             h10, h15, h20, h25, w_cnt = 0, 0, 0, 0, 0
             is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
+            
             for m in range(range_min):
-                if m < brk: continue
-                c = st + timedelta(minutes=m); is_n = (c.hour >= 22 or c.hour < 6)
-                w_cnt += 1; ov8 = (w_cnt > 480); w = 1.0
+                if m < brk: 
+                    continue
+                c = st + timedelta(minutes=m)
+                is_n = (c.hour >= 22 or c.hour < 6)
+                w_cnt += 1
+                ov8 = (w_cnt > 480)
+                w = 1.0
+                
                 if not is_h:
                     if ov8 and is_n: w = 2.0
                     elif ov8 or is_n: w = 1.5
                 else:
                     if ov8 and is_n: w = 2.5
                     elif ov8 or is_n: w = 2.0
+                
                 if w == 1.0: h10 += 1/60
                 elif w == 1.5: h15 += 1/60
                 elif w == 2.0: h20 += 1/60
                 elif w == 2.5: h25 += 1/60
-            row_net = net_min/60; total_net += row_net; sum15 += h15; sum20 += h20; sum25 += h25
-            if not is_h and row_net < 8: total_minus += (8 - row_net)
+            
+            row_net = net_min/60
+            total_net += row_net
+            sum15 += h15
+            sum20 += h20
+            sum25 += h25
+            
+            if not is_h and row_net < 8: 
+                total_minus += (8 - row_net)
+            
             w_sum = (h10*1 + h15*1.5 + h20*2 + h25*2.5)
             self.tree.item(item, values=(v[0], v[1], f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{w_sum:.1f}h"))
-        adj_x15 = max(0, sum15 - total_minus); f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+        
+        adj_x15 = max(0, sum15 - total_minus)
+        f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+        
         self.summary_box.delete("0.0", "end")
         self.summary_box.insert("0.0", f"1. 총 실근무: {total_net:.1f}h\n2. OT: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 합계: {f_ot:.1f}h")
 
