@@ -24,7 +24,7 @@ jobs:
 
     - name: PyInstaller 빌드
       run: |
-        # --collect-all 옵션을 사용하여 설정 파일을 반드시 포함시킵니다.
+        # [핵심] --collect-all 옵션이 config.yaml 누락을 방지합니다.
         pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" `
         --collect-all "rapidocr_onnxruntime" `
         main.py
@@ -32,5 +32,5 @@ jobs:
     - name: 결과물 업로드
       uses: actions/upload-artifact@v4
       with:
-        name: OT_calculator_Stable
+        name: OT_calculator_Final
         path: dist/OT_calculator.exe
