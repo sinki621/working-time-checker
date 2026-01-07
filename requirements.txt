@@ -1,4 +1,4 @@
-easyocr
+rapidocr_onnxruntime
 customtkinter
 Pillow
 numpy
