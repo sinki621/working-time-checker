@@ -1,4 +1,4 @@
-name: Build EXE with EasyOCR
+name: Build All-in-One EXE
 
 on:
   push:
@@ -22,12 +22,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: EXE 빌드 실행
+    - name: 모델 파일 미리 다운로드
       run: |
-        pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" main.py
+        python download_models.py
+
+    - name: PyInstaller 빌드 (모델 포함)
+      run: |
+        # --add-data "원본경로;대상경로" 옵션으로 모델 폴더 포함
+        # Windows 환경이므로 세미콜론(;)을 사용합니다.
+        pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" `
+        --add-data "models;models" `
+        main.py
 
     - name: 빌드 결과물 업로드
       uses: actions/upload-artifact@v3
       with:
-        name: OT_calculator_exe
+        name: OT_calculator_Full_Pack
         path: dist/OT_calculator.exe
