@@ -8,6 +8,7 @@ from PIL import Image, ImageGrab, ImageTk, ImageOps
 import pytesseract
 from datetime import datetime, timedelta
 import ctypes
+from tkinter.font import Font
 
 # =============================================================================
 # 1. 환경 설정 및 리소스 경로 처리
@@ -79,12 +80,19 @@ class OTCalculator(ctk.CTk):
         self.btn_sample = ctk.CTkButton(top_bar, text="💡 Sample", command=self.show_sample, fg_color="#3498db", width=120)
         self.btn_sample.pack(side="right", padx=10)
 
-        # [변경 사항] 표의 행 간격 겹침 방지를 위해 rowheight를 충분히 확보 (40)
+        # ---------------------------------------------------------
+        # [동적 간격 설정] 폰트 크기에 따른 행 높이 자동 계산
+        # ---------------------------------------------------------
+        base_font_size = 11
+        tree_font = Font(family="Segoe UI", size=base_font_size)
+        # 폰트 높이의 약 2.5배를 행 높이로 설정 (겹침 방지)
+        calculated_row_height = int(tree_font.metrics('linespace') * 2.5)
+
         style = ttk.Style()
-        style.theme_use("default") 
+        style.theme_use("default")
         style.configure("Treeview", 
-                        rowheight=40, 
-                        font=("Segoe UI", 11),
+                        rowheight=calculated_row_height, 
+                        font=tree_font,
                         background="#ffffff",
                         fieldbackground="#ffffff")
         style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
@@ -92,19 +100,30 @@ class OTCalculator(ctk.CTk):
         self.tree_frame = ctk.CTkFrame(self)
         self.tree_frame.pack(pady=10, fill="both", expand=True, padx=20)
         
+        # 스크롤바 추가 (동적 조절 시 필수)
+        scrollbar = ttk.Scrollbar(self.tree_frame)
+        scrollbar.pack(side="right", fill="y")
+
         self.tree = ttk.Treeview(self.tree_frame, 
                                 columns=("Date", "Range", "Break", "NetDiff", "x1.5", "x2.0", "x2.5", "Weighted"), 
-                                show='headings')
+                                show='headings',
+                                yscrollcommand=scrollbar.set)
         
+        scrollbar.config(command=self.tree.yview)
+
+        # ---------------------------------------------------------
+        # [열 너비 자동 조절] stretch 옵션을 True로 설정하여 창 크기에 비례하게 함
+        # ---------------------------------------------------------
         cols = [
-            ("Date", "날짜(요일)", 130), ("Range", "근무시간", 180), ("Break", "휴게(역산)", 100), 
-            ("NetDiff", "실근무 (+/-)", 130), ("x1.5", "x1.5", 100), 
-            ("x2.0", "x2.0", 100), ("x2.5", "x2.5", 100), ("Weighted", "환산합계", 100)
+            ("Date", "날짜(요일)", 1), ("Range", "근무시간", 2), ("Break", "휴게(역산)", 1), 
+            ("NetDiff", "실근무 (+/-)", 1), ("x1.5", "x1.5", 1), 
+            ("x2.0", "x2.0", 1), ("x2.5", "x2.5", 1), ("Weighted", "환산합계", 1)
         ]
         
-        for cid, txt, w in cols:
+        for cid, txt, weight in cols:
             self.tree.heading(cid, text=txt)
-            self.tree.column(cid, width=w, anchor="center")
+            # weight 값을 주어 창이 커질 때 해당 비율만큼 열 너비가 늘어남
+            self.tree.column(cid, anchor="center", stretch=True, width=100)
         
         self.tree.pack(side="left", fill="both", expand=True)
         
@@ -134,7 +153,7 @@ class OTCalculator(ctk.CTk):
             img = ImageOps.grayscale(img)
             img = ImageOps.expand(img, border=50, fill='white')
             
-            # 한글 인식도 중요하므로 kor+eng 사용
+            # kor+eng 모델 사용
             custom_config = r'--oem 1 --psm 6'
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
             self.calculate_data(full_text)
@@ -142,9 +161,7 @@ class OTCalculator(ctk.CTk):
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 1. 날짜 및 근무시간 범위 추출 패턴
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        # 2. 총 시간(역산용) 추출 패턴: "18시간 50분" 또는 "9시간 7분" 형태
         total_time_pattern = re.compile(r'(\d{1,2})시간\s*(\d{1,2})?분?')
         
         for item in self.tree.get_children(): self.tree.delete(item)
@@ -158,14 +175,11 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                
-                # 근무 시간차(Range Duration) 계산
                 fmt = "%H:%M"
                 st, et = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
                 if et < st: et += timedelta(days=1)
                 range_minutes = int((et - st).total_seconds() / 60)
                 
-                # [핵심] 총 시간(실근무) 역산 로직
                 after_text = line[match.end():]
                 total_match = total_time_pattern.search(after_text)
                 
@@ -173,13 +187,10 @@ class OTCalculator(ctk.CTk):
                     h_val = int(total_match.group(1))
                     m_val = int(total_match.group(2)) if total_match.group(2) else 0
                     actual_worked_minutes = (h_val * 60) + m_val
-                    
-                    # 휴게시간 = (출퇴근 시간차) - (이미지에 찍힌 총 시간)
                     break_val = range_minutes - actual_worked_minutes
-                    # 음수 발생 시(인식 오류) 기본값 60분 처리
                     if break_val < 0: break_val = 60
                 else:
-                    break_val = 60 # 총 시간 인식 실패 시 기본값
+                    break_val = 60
                 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
