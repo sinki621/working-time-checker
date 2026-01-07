@@ -24,10 +24,9 @@ jobs:
 
     - name: PyInstaller 빌드
       run: |
-        # rapidocr_onnxruntime의 모든 종속성(모델 파일 포함)을 강제로 포함합니다.
+        # rapidocr_onnxruntime의 모든 리소스(한글 사전/모델 포함)를 강제 수집
         pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" `
         --collect-all "rapidocr_onnxruntime" `
-        --collect-submodules "rapidocr_onnxruntime" `
         main.py
 
     - name: 결과물 업로드
