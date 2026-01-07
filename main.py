@@ -23,7 +23,8 @@ except:
 
 try:
     import holidays
-    kr_holidays = holidays.KR()
+    # 패키징 에러 방지를 위한 명시적 선언
+    kr_holidays = holidays.country_holidays('KR')
 except:
     kr_holidays = {}
 
@@ -41,7 +42,7 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("OT Calculator")
+        self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
@@ -92,8 +93,8 @@ class OTCalculator(ctk.CTk):
         
         cols = [
             ("Date", "날짜(요일)", 130), ("Range", "근무시간", 160), ("Break", "휴게", 80), 
-            ("NetDiff", "실근무 (+/-)", 110), ("x1.5", "x1.5 (h)", 100), 
-            ("x2.0", "x2.0 (h)", 100), ("x2.5", "x2.5 (h)", 100), ("Weighted", "환산합계", 100)
+            ("NetDiff", "실근무 (+/-)", 110), ("x1.5", "x1.5", 100), 
+            ("x2.0", "x2.0", 100), ("x2.5", "x2.5", 100), ("Weighted", "환산합계", 100)
         ]
         
         for cid, txt, w in cols:
@@ -102,7 +103,7 @@ class OTCalculator(ctk.CTk):
         
         self.tree.pack(side="left", fill="both", expand=True)
         
-        self.summary_box = ctk.CTkTextbox(self, height=250, font=("Segoe UI", 15))
+        self.summary_box = ctk.CTkTextbox(self, height=260, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
     def show_sample(self):
@@ -128,128 +129,106 @@ class OTCalculator(ctk.CTk):
             w, h = img.size
             img = img.resize((w*2, h*2), Image.Resampling.LANCZOS)
             gray = ImageOps.grayscale(img)
-            enhancer = ImageEnhance.Contrast(gray).enhance(1.8)
+            enhancer = ImageEnhance.Contrast(gray).enhance(2.0)
+            # PSM 6: 단일 텍스트 블록으로 간주하여 줄 단위 인식 강화
             full_text = pytesseract.image_to_string(enhancer, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}).*?(\d{2,3})', re.S | re.I)
+        # 1. 날짜(MM/DD)와 시간 범위(HH:MM-HH:MM)를 먼저 찾습니다.
+        line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
+        # 2. 숫자만 추출하기 위한 정규식
+        num_pattern = re.compile(r'\d+')
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
         year = int(self.year_var.get())
         records = []
-        lines = text.split('\n')
         
-        for line in lines:
-            match = pattern.search(line)
+        for line in text.split('\n'):
+            match = line_pattern.search(line)
             if not match: continue
             
             try:
-                d_v, s_t, e_t, r_raw = match.groups()
-                r_val = int(r_raw)
-                if r_val > 240 and (r_raw.endswith('2') or r_raw.endswith('7')):
-                    r_val = int(r_raw[:-1])
+                d_v, s_t, e_t = match.groups()
                 
+                # 휴게시간 인식 단순화: 시간 범위 뒤에 나오는 숫자 중 첫 번째를 휴게시간으로 간주
+                # 스크린샷 구조상 "근무시간" 바로 다음에 "휴게시간" 숫자가 옵니다.
+                after_time_text = line[match.end():]
+                nums = num_pattern.findall(after_time_text)
+                
+                break_val = 0
+                if nums:
+                    # 가장 처음 발견되는 숫자가 휴게시간(분)일 확률이 매우 높음
+                    break_val = int(nums[0])
+                    # 만약 OCR이 '120분'을 '1208' 등으로 잘못 읽는 경우 보정 (최대 240분 제한)
+                    if break_val > 240:
+                        break_val = int(str(break_val)[:2]) if len(str(break_val)) > 2 else 60
+
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
-                is_holiday = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
+                is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
                 fmt = "%H:%M"
-                start_time = datetime.strptime(s_t, fmt)
-                end_time = datetime.strptime(e_t, fmt)
-                if end_time < start_time: end_time += timedelta(days=1)
+                st, et = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
+                if et < st: et += timedelta(days=1)
                 
-                records.append({
-                    'dt': dt, 'start': start_time, 'end': end_time, 
-                    'break_min': r_val, 'is_h': is_holiday, 'range': f"{s_t}-{e_t}"
-                })
+                records.append({'dt': dt, 'st': st, 'et': et, 'brk': break_val, 'is_h': is_h, 'range': f"{s_t}-{e_t}"})
             except: continue
 
         records.sort(key=lambda x: x['dt'])
-        
-        total_net_sum = 0
-        sum_x15, sum_x20, sum_x25 = 0, 0, 0
-        total_minus_hours = 0  # 유연근무용 마이너스 시간 합산
-        holiday_dates = []
+        total_net, sum15, sum20, sum25, total_minus = 0, 0, 0, 0, 0
+        holiday_list = []
 
         for r in records:
-            worked_min = 0
-            h10, h15, h20, h25 = 0, 0, 0, 0
-            total_duration_min = int((r['end'] - r['start']).total_seconds() / 60)
-            
-            for m in range(total_duration_min):
-                if m < r['break_min']: continue
-                check_time = (r['start'] + timedelta(minutes=m))
-                hour_now = check_time.hour
-                is_night = (hour_now >= 22 or hour_now < 6)
+            h10, h15, h20, h25, worked_min = 0, 0, 0, 0, 0
+            dur = int((r['et'] - r['st']).total_seconds() / 60)
+            for m in range(dur):
+                if m < r['brk']: continue
+                check = r['st'] + timedelta(minutes=m)
+                is_n = (check.hour >= 22 or check.hour < 6)
                 worked_min += 1
-                is_over_8h = (worked_min > 480)
+                ov8 = (worked_min > 480)
                 
-                mult = 1.0
+                m_val = 1.0
                 if not r['is_h']:
-                    if is_over_8h and is_night: mult = 2.0
-                    elif is_over_8h or is_night: mult = 1.5
-                    else: mult = 1.0
+                    if ov8 and is_n: m_val = 2.0
+                    elif ov8 or is_n: m_val = 1.5
                 else:
-                    if is_over_8h and is_night: mult = 2.5
-                    elif is_over_8h: mult = 2.0
-                    elif is_night: mult = 2.0
-                    else: mult = 1.5
+                    if ov8 and is_n: m_val = 2.5
+                    elif ov8 or is_n: m_val = 2.0 
                 
-                if mult == 1.0: h10 += 1/60
-                elif mult == 1.5: h15 += 1/60
-                elif mult == 2.0: h20 += 1/60
-                elif mult == 2.5: h25 += 1/60
+                if m_val == 1.0: h10 += 1/60
+                elif m_val == 1.5: h15 += 1/60
+                elif m_val == 2.0: h20 += 1/60
+                elif m_val == 2.5: h25 += 1/60
 
-            net_h = h10 + h15 + h20 + h25
-            weighted_day = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
+            net = h10 + h15 + h20 + h25
+            total_net += net
+            sum15 += h15; sum20 += h20; sum25 += h25
+            if not r['is_h'] and net < 8: total_minus += (8 - net)
             
-            # 마이너스 시간 계산 (8시간 미달분)
-            if not r['is_h'] and net_h < 8:
-                total_minus_hours += (8 - net_h)
+            day_w = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
+            w_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
+            d_str = f"{r['dt'].strftime('%m/%d')} ({w_name})"
+            if r['is_h']: holiday_list.append(d_str)
+            
+            diff = net - 8
+            self.tree.insert("", "end", values=(d_str, r['range'], f"{r['brk']}m", f"{net:.1f} ({'+' if diff>=0 else ''}{diff:.1f})",
+                                                f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{day_w:.1f}h"))
 
-            weekday_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
-            date_str = f"{r['dt'].strftime('%m/%d')} ({weekday_name})"
-            if r['is_h']: holiday_dates.append(date_str)
-            
-            diff = net_h - 8
-            diff_display = f"{net_h:.1f} ({'+' if diff>=0 else ''}{diff:.1f})"
-            
-            self.tree.insert("", "end", values=(
-                date_str, r['range'], f"{r['break_min']}m", diff_display,
-                f"{h15:.1f}" if h15>0 else "-", f"{h20:.1f}" if h20>0 else "-", 
-                f"{h25:.1f}" if h25>0 else "-", f"{weighted_day:.1f}h"
-            ))
-            
-            total_net_sum += net_h
-            sum_x15 += h15
-            sum_x20 += h20
-            sum_x25 += h25
-
-        # 1. 유연근무 적용: x1.5 합계에서 마이너스 시간 차감
-        final_x15 = max(0, sum_x15 - total_minus_hours)
-        
-        # 2. 최종 환산 OT 합계: (x1.5 * 1.5) + (x2.0 * 2.0) + (x2.5 * 2.5)
-        total_weighted_ot = (final_x15 * 1.5) + (sum_x20 * 2.0) + (sum_x25 * 2.5)
+        adj_x15 = max(0, sum15 - total_minus)
+        final_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
 
         self.summary_box.delete("0.0", "end")
-        summary = f"1. 총 실근무 합계: {total_net_sum:.1f} 시간\n"
-        summary += "------------------------------------------------------------\n"
-        summary += f"2. 배율별 OT 합계 (유연근무 상쇄 적용):\n"
-        summary += f"   - [x1.5]: {final_x15:.1f} h (부족분 {total_minus_hours:.1f}h 차감됨)\n"
-        summary += f"   - [x2.0]: {sum_x20:.1f} h\n"
-        summary += f"   - [x2.5]: {sum_x25:.1f} h\n"
-        summary += "------------------------------------------------------------\n"
-        summary += f"3. 최종 환산 OT 합계 (가중치 결과): {total_weighted_ot:.1f} 시간\n"
-        
-        # Stand-by 문구 복구
-        if holiday_dates:
-            summary += "\n⚠️ [Stand-by 여부 확인 필요]\n"
-            summary += f"대상 일자: {', '.join(holiday_dates)}"
-        
-        self.summary_box.insert("0.0", summary)
+        msg = f"1. 총 실근무 합계: {total_net:.1f} 시간\n"
+        msg += "-"*60 + "\n2. 배율별 OT 합계 (유연근무 상쇄 적용):\n"
+        msg += f"   - [x1.5]: {adj_x15:.1f} h (부족분 {total_minus:.1f}h 차감됨)\n"
+        msg += f"   - [x2.0]: {sum20:.1f} h\n   - [x2.5]: {sum25:.1f} h\n"
+        msg += "-"*60 + "\n3. 최종 환산 OT 합계 (가중치 결과): {0:.1f} 시간\n".format(final_ot)
+        if holiday_list: msg += "\n⚠️ [Stand-by 근무여부 확인 필요]\n대상 일자: " + ", ".join(holiday_list)
+        self.summary_box.insert("0.0", msg)
 
 if __name__ == "__main__":
     app = OTCalculator()
