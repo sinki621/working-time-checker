@@ -116,7 +116,7 @@ class OTCalculator(ctk.CTk):
         label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
 
     def load_image(self):
-        f = filedialog.askopenfilename()
+        f = filedialog.askopenfilename(); 
         if f: self.process_image(Image.open(f))
 
     def paste_from_clipboard(self):
@@ -125,30 +125,30 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 원본 선명화 (Grayscale)
+            # [전략 변경] 모든 이미지 처리(확대, 필터)를 중단하고 
+            # 원본 이미지에 여백만 주어 Tesseract에 전달합니다.
+            
+            # 1. Grayscale 변환 (필수)
             img = ImageOps.grayscale(img)
-            # 2. 여백 추가
-            img = ImageOps.expand(img, border=80, fill='white')
             
-            # [핵심 변경] 언어 설정을 kor+eng로 통합하여 한글 스크린샷 대응
-            # psm 6: 균일한 텍스트 블록으로 처리
-            # preserve_interword_spaces=1: 숫자 사이 간격 강제 보존
-            custom_config = (
-                r'--oem 1 --psm 6 '
-                r'-l kor+eng '
-                r'-c tessedit_char_whitelist=0123456789/:- '
-                r'-c preserve_interword_spaces=1'
-            )
+            # 2. 여백 추가 (테두리 근처 인식 오류 방지용)
+            img = ImageOps.expand(img, border=50, fill='white')
             
-            full_text = pytesseract.image_to_string(img, config=custom_config)
+            # 3. Tesseract 설정
+            # oem 1: LSTM 엔진 (문맥 파악 우수)
+            # psm 6: 표 형태에 적합
+            # whitelist: 숫자 및 관련 기호만
+            custom_config = r'--oem 1 --psm 6 -c tessedit_char_whitelist=0123456789/:- '
+            
+            # 숫자는 'eng' 모델이 'kor' 모델보다 훨씬 명확합니다.
+            full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 120 같은 3자리 숫자를 하나의 덩어리로 인식하기 위한 패턴
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        num_pattern = re.compile(r'\d{2,3}') # 최소 2자리(30, 60, 90)에서 3자리(120) 타겟팅
+        num_pattern = re.compile(r'\d+')
         
         for item in self.tree.get_children(): self.tree.delete(item)
         
@@ -162,21 +162,25 @@ class OTCalculator(ctk.CTk):
             try:
                 d_v, s_t, e_t = match.groups()
                 after_text = line[match.end():]
-                
-                # [개선된 숫자 추출]
-                # 문장 끝까지 탐색하여 가장 처음 발견되는 2~3자리 숫자를 휴게시간으로 간주
                 nums = num_pattern.findall(after_text)
                 
-                break_val = 60 # 기본값
+                # 휴게시간 로직 고도화
+                break_val = 60 
                 if nums:
-                    # '12'와 '0'이 분리되었을 경우를 대비해 첫 두 뭉치를 합쳐보고 3자리가 되면 그것을 사용
-                    combined = "".join(nums[:2]) if len(nums) > 1 else nums[0]
-                    if "120" in combined: break_val = 120
-                    elif "90" in combined: break_val = 90
-                    else: break_val = int(nums[0])
-
-                if break_val > 240: break_val = 60 # 상식 밖의 값 필터링
-
+                    raw_s = "".join(nums)
+                    # 만약 휴게시간 위치에 2나 22가 들어오면, 정황상 90 또는 60일 가능성이 큼
+                    if raw_s == "2": break_val = 90
+                    elif raw_s == "22": break_val = 60
+                    elif len(raw_s) >= 2:
+                        break_val = int(raw_s[:2])
+                    else:
+                        break_val = int(raw_s)
+                
+                # 안전 장치: 휴게시간은 보통 0, 30, 60, 90 단위
+                if break_val not in [0, 30, 60, 90, 120, 150]:
+                    # 가장 가까운 값으로 보정하거나 오인식 시 60분으로 처리
+                    if break_val == 2: break_val = 90
+                
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
