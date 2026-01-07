@@ -1,7 +1,8 @@
-name: Build Portable OTCalculator (Full Fix)
+name: Build CSV Chart Viewer
 
 on: 
   push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -25,30 +26,32 @@ jobs:
         python -m pip install --upgrade pip
         pip install customtkinter Pillow pytesseract holidays pyinstaller
     
-    - name: Prepare Engine Folder
+    - name: Prepare Assets
       shell: pwsh
       run: |
+        # Tesseract 엔진 복사
         $installPath = "C:\Program Files\Tesseract-OCR"
         New-Item -ItemType Directory -Force -Path "Tesseract-OCR"
         xcopy "$installPath\*" "Tesseract-OCR\" /E /H /Y /I
-        if (Test-Path "tessdata") {
-            xcopy "tessdata\*" "Tesseract-OCR\tessdata\" /E /H /Y /I
+        
+        # sample.png가 없는 경우를 대비해 체크 (에러 방지)
+        if (!(Test-Path "sample.png")) {
+           Write-Host "Warning: sample.png not found. Please ensure it exists in root."
         }
 
     - name: Build EXE
       shell: pwsh
       run: |
-        # --collect-all을 사용하여 CustomTkinter와 Holidays 라이브러리의 모든 내부 파일을 포함합니다.
-        # --windowed 옵션을 유지하되, 만약 실행이 안 된다면 이 옵션을 빼고 빌드하여 로그를 봐야 합니다.
         pyinstaller --noconfirm --onefile --windowed `
           --add-data "Tesseract-OCR;Tesseract-OCR" `
+          --add-data "sample.png;." `
           --collect-all customtkinter `
           --collect-all holidays `
           --hidden-import "holidays.countries.korea" `
-          --name "OTCalculator" main.py
+          --name "OTCalculator_KISHIN" main.py
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OTCalculator_v${{ github.run_number }}
-        path: dist/OTCalculator.exe
+        name: CSV_Chart_Viewer_Win
+        path: dist/OTCalculator_KISHIN.exe
