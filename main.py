@@ -10,7 +10,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# DPI 인식 설정
+# DPI 및 환경 설정
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -27,10 +27,11 @@ class OTCalculator(ctk.CTk):
         super().__init__()
         
         self.title("OT calculator (Producer: KI.Shin)")
-        self.geometry("1600x950")
+        self.geometry("1600(w)x950(h)")
         ctk.set_appearance_mode("light")
         
         try:
+            # RapidOCR 엔진 초기화
             self.engine = RapidOCR()
         except Exception as e:
             messagebox.showerror("OCR Error", f"RapidOCR 초기화 실패: {e}")
@@ -51,9 +52,8 @@ class OTCalculator(ctk.CTk):
         ctk.CTkButton(top_bar, text="📁 Load File", command=self.load_image, width=140).pack(side="left", padx=10)
         ctk.CTkButton(top_bar, text="📋 Paste (Ctrl+V)", command=self.paste_from_clipboard, fg_color="#2ecc71", width=160).pack(side="left", padx=10)
         
-        ctk.CTkLabel(top_bar, text="* 한글/영문 스크린샷 모두 지원", font=("Segoe UI", 12, "italic"), text_color="gray").pack(side="right", padx=20)
+        ctk.CTkLabel(top_bar, text="* 인식 실패 시 로그 확인", font=("Segoe UI", 12, "italic"), text_color="gray").pack(side="right", padx=20)
 
-        # 트리뷰 구성
         style = ttk.Style()
         style.theme_use("default")
         style.configure("Treeview", rowheight=35, font=("Segoe UI", 11))
@@ -97,16 +97,20 @@ class OTCalculator(ctk.CTk):
         try:
             img_np = np.array(img.convert('RGB'))
             result, _ = self.engine(img_np)
-            if not result: return
+            
+            if not result:
+                messagebox.showinfo("결과", "이미지에서 텍스트를 찾지 못했습니다.")
+                return
 
-            # 1. Y좌표 기준으로 텍스트들을 행 단위로 묶기 (오차범위 15px)
+            # Y좌표 기준으로 정렬하여 행 단위 그룹화 로직 강화
             result.sort(key=lambda x: x[0][0][1])
             lines = []
             if result:
                 last_y = result[0][0][0][1]
                 current_line = []
                 for res in result:
-                    if abs(res[0][0][1] - last_y) < 15:
+                    # 행 간격 오차 범위를 20px로 확대
+                    if abs(res[0][0][1] - last_y) < 20:
                         current_line.append(res[1])
                     else:
                         lines.append(" ".join(current_line))
@@ -114,49 +118,66 @@ class OTCalculator(ctk.CTk):
                         last_y = res[0][0][1]
                 lines.append(" ".join(current_line))
 
+            # 디버깅: 인식된 모든 행을 콘솔에 출력 (필요시)
+            print("--- OCR 인식 결과 ---")
+            for idx, ln in enumerate(lines): print(f"Line {idx}: {ln}")
+
             self.parse_rows(lines)
         except Exception as e:
-            messagebox.showerror("Error", f"분석 오류: {e}")
+            messagebox.showerror("Error", f"이미지 분석 중 오류: {e}")
 
     def parse_rows(self, lines):
         for item in self.tree.get_children(): self.tree.delete(item)
         year = int(self.year_var.get())
+        found_count = 0
 
         for line in lines:
-            line = line.replace(" ", "")
-            # 날짜 찾기 (12/31 등)
+            # 1. 날짜 추출 (12/31 등)
             date_m = re.search(r'(\d{1,2}/\d{1,2})', line)
-            if date_m:
-                date_str = date_m.group(1)
-                
-                # 근무 시간 범위 찾기 (06:50-03:40)
-                times = re.findall(r'\d{2}:\d{2}', line)
-                f_range = f"{times[0]}-{times[1]}" if len(times) >= 2 else ""
-                
-                # 총 시간 찾기 (한글: 18시간50분 / 영문: 18h50m)
-                # h/시간, m/분 키워드 모두 대응
-                h_match = re.search(r'(\d+)(?:시간|h|H)', line)
-                m_match = re.search(r'(\d+)(?:분|m|M)', line)
-                
-                # 단, 휴게시간(120m, 60m)과 혼동되지 않도록 '시간' 단위가 있거나 
-                # 줄의 끝쪽에 위치한 숫자를 우선함
-                f_net = 0
-                if h_match or m_match:
-                    f_net = (int(h_match.group(1)) if h_match else 0)*60 + (int(m_match.group(1)) if m_match else 0)
+            if not date_m: continue
+            
+            date_str = date_m.group(1)
+            
+            # 2. 근무 시간 범위 추출 (06:50 - 03:40)
+            times = re.findall(r'\d{2}:\d{2}', line)
+            if len(times) < 2: continue
+            
+            f_range = f"{times[0]}-{times[1]}"
+            
+            # 3. 실근무 총 시간 추출 (한글/영문 공용 정규식 강화)
+            # 숫자 뒤에 '시간', 'h', '분', 'm'이 오는지 확인 (공백 허용)
+            h_match = re.search(r'(\d+)\s*(?:시간|h|H)', line)
+            m_match = re.search(r'(\d+)\s*(?:분|m|M)', line)
+            
+            # '8시간'만 있고 '분'이 없는 경우도 처리
+            f_net = 0
+            if h_match or m_match:
+                f_net = (int(h_match.group(1)) if h_match else 0)*60 + (int(m_match.group(1)) if m_match else 0)
+            
+            # 만약 위 정규식으로 안 잡히면, 줄의 마지막 근처에 있는 "숫자h 숫자m" 형태 재시도
+            if f_net == 0:
+                alt_match = re.search(r'(\d+)\s*[hH]\s*(\d+)\s*[mM]', line)
+                if alt_match:
+                    f_net = int(alt_match.group(1))*60 + int(alt_match.group(2))
 
-                if f_range and f_net > 0:
-                    try:
-                        st_s, et_s = f_range.split('-')
-                        st = datetime.strptime(st_s, "%H:%M")
-                        et = datetime.strptime(et_s, "%H:%M")
-                        if et < st: et += timedelta(days=1)
-                        
-                        range_min = int((et-st).total_seconds()/60)
-                        brk = range_min - f_net
-                        
-                        dt = datetime.strptime(f"{year}/{date_str}", "%Y/%m/%d")
-                        self.insert_row(dt, st_s, et_s, f_net, brk)
-                    except: pass
+            if f_range and f_net > 0:
+                try:
+                    st_s, et_s = times[0], times[1]
+                    st = datetime.strptime(st_s, "%H:%M")
+                    et = datetime.strptime(et_s, "%H:%M")
+                    if et < st: et += timedelta(days=1)
+                    
+                    range_min = int((et-st).total_seconds()/60)
+                    brk = range_min - f_net
+                    
+                    dt = datetime.strptime(f"{year}/{date_str}", "%Y/%m/%d")
+                    self.insert_row(dt, st_s, et_s, f_net, brk)
+                    found_count += 1
+                except: pass
+        
+        if found_count == 0:
+            messagebox.showinfo("알림", "날짜와 실근무 시간이 포함된 행을 찾지 못했습니다.\n캡처 범위를 확인해 주세요.")
+            
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
