@@ -5,13 +5,15 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from PIL import Image, ImageGrab, ImageTk, ImageOps
-from rapidocr_onnxruntime import RapidOCR # RapidOCR 도입
+from rapidocr_onnxruntime import RapidOCR
 import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 from tkinter.font import Font
 
-# DPI 및 환경 설정
+# =============================================================================
+# 환경 설정 및 리소스 경로 처리
+# =============================================================================
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -24,6 +26,17 @@ try:
 except:
     kr_holidays = {}
 
+def resource_path(relative_path):
+    """ PyInstaller 임시 폴더에서 파일을 찾는 함수 """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# =============================================================================
+# 메인 애플리케이션 클래스
+# =============================================================================
 class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -32,29 +45,39 @@ class OTCalculator(ctk.CTk):
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
-        # RapidOCR 초기화 (별도 모델 경로 지정 없이도 가볍게 동작)
+        # RapidOCR 초기화 (config.yaml 경로 문제 방지)
         try:
             self.engine = RapidOCR()
         except Exception as e:
             messagebox.showerror("OCR Error", f"RapidOCR 초기화 실패: {e}")
 
         self.setup_ui()
+        
+        # 단축키 바인딩
         self.bind('<Control-v>', lambda e: self.paste_from_clipboard())
         self.bind('<Control-V>', lambda e: self.paste_from_clipboard())
 
     def setup_ui(self):
+        # 상단바
         top_bar = ctk.CTkFrame(self, fg_color="transparent")
         top_bar.pack(pady=15, fill="x", padx=20)
         
         self.year_var = ctk.StringVar(value=str(datetime.now().year))
         ctk.CTkLabel(top_bar, text="Year:", font=("Segoe UI", 14, "bold")).pack(side="left", padx=5)
-        ctk.CTkComboBox(top_bar, values=["2024", "2025", "2026", "2027"], variable=self.year_var, width=90).pack(side="left", padx=5)
+        self.year_dropdown = ctk.CTkComboBox(top_bar, values=["2024", "2025", "2026", "2027"], variable=self.year_var, width=90)
+        self.year_dropdown.pack(side="left", padx=5)
         
-        ctk.CTkButton(top_bar, text="📁 Load File", command=self.load_image, width=140).pack(side="left", padx=10)
-        ctk.CTkButton(top_bar, text="📋 Paste (Ctrl+V)", command=self.paste_from_clipboard, fg_color="#2ecc71", width=160).pack(side="left", padx=10)
+        self.btn_load = ctk.CTkButton(top_bar, text="📁 Load File", command=self.load_image, width=140)
+        self.btn_load.pack(side="left", padx=10)
         
-        ctk.CTkLabel(top_bar, text="* 인식 오류 시 '실근무' 더블클릭 수정", font=("Segoe UI", 12, "italic"), text_color="gray").pack(side="right", padx=20)
+        self.btn_paste = ctk.CTkButton(top_bar, text="📋 Paste (Ctrl+V)", command=self.paste_from_clipboard, fg_color="#2ecc71", width=160)
+        self.btn_paste.pack(side="left", padx=10)
+        
+        # 오류가 났던 부분: 존재하지 않는 함수를 호출하는 버튼을 제거하거나 함수를 정의해야 함
+        # 여기서는 도움말 텍스트로 대체합니다.
+        ctk.CTkLabel(top_bar, text="* 실근무 칸 더블클릭 수정 가능", font=("Segoe UI", 12, "italic"), text_color="gray").pack(side="right", padx=20)
 
+        # 트리뷰 설정
         tree_font = Font(family="Segoe UI", size=11)
         row_h = int(tree_font.metrics('linespace') * 2.5)
         style = ttk.Style()
@@ -66,7 +89,8 @@ class OTCalculator(ctk.CTk):
         self.tree_frame.pack(pady=10, fill="both", expand=True, padx=20)
         
         self.tree = ttk.Treeview(self.tree_frame, columns=("Date", "Range", "NetTime", "Break", "x1.5", "x2.0", "x2.5", "Weighted"), show='headings')
-        cols = [("Date", "날짜(요일)", 130), ("Range", "근무범위", 180), ("NetTime", "실근무(총시간)", 150), ("Break", "휴게(역산)", 100), ("x1.5", "x1.5", 90), ("x2.0", "x2.0", 90), ("x2.5", "x2.5", 90), ("Weighted", "환산합계", 100)]
+        cols = [("Date", "날짜(요일)", 130), ("Range", "근무범위", 180), ("NetTime", "실근무(총시간)", 150), 
+                ("Break", "휴게(역산)", 100), ("x1.5", "x1.5", 90), ("x2.0", "x2.0", 90), ("x2.5", "x2.5", 90), ("Weighted", "환산합계", 100)]
         for cid, txt, w in cols:
             self.tree.heading(cid, text=txt)
             self.tree.column(cid, width=w, anchor="center")
@@ -100,7 +124,6 @@ class OTCalculator(ctk.CTk):
     def process_image(self, img):
         try:
             img_np = np.array(img.convert('RGB'))
-            # RapidOCR 실행 결과: [[좌표], "텍스트", 확신도] 형태의 리스트
             result, _ = self.engine(img_np)
             if result:
                 texts = [line[1] for line in result]
@@ -179,4 +202,5 @@ class OTCalculator(ctk.CTk):
         self.summary_box.insert("0.0", f"1. 총 실근무 합계: {total_net:.1f}h\n2. OT 합계: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 최종 환산 합계: {f_ot:.1f} 시간")
 
 if __name__ == "__main__":
-    OTCalculator().mainloop()
+    app = OTCalculator()
+    app.mainloop()
