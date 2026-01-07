@@ -41,8 +41,8 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 프로그램 이름 변경: OT Calculator
-        self.title("OT Calculator (Producer: KI.Shin)")
+        # 프로그램 이름 반영: OT calculator
+        self.title("OT calculator (Producer: KI.Shin)")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
@@ -126,31 +126,32 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 이미지 확대 (3배)
+            # 1. 이미지 확대 (인식률 향상의 기초)
             w, h = img.size
             img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
             
             # 2. Gray scale 변환
             img = ImageOps.grayscale(img)
             
-            # 3. 대비 강화 (Binary 변환 전 단계)
-            img = ImageEnhance.Contrast(img).enhance(3.0)
+            # 3. 대비 극대화 (Binary 변환 전 단계)
+            img = ImageEnhance.Contrast(img).enhance(3.5)
             
-            # 4. Binary(이진화) 변환
-            # 특정 임계값(200)을 기준으로 흑백 분리
-            img = img.point(lambda p: 255 if p > 200 else 0)
+            # 4. Binary(이진화) 변환 - 9와 6의 미세한 꼬리부분 노이즈 제거
+            img = img.point(lambda p: 255 if p > 190 else 0)
             
-            # 5. 형태적 변환 효과 (Dilation/Sharpen)
-            # 숫자가 끊기지 않게 약간 팽창시킨 후 날카롭게 다듬음
-            img = img.filter(ImageFilter.MaxFilter(3)) # Dilation 효과 (획 두껍게)
-            img = img.filter(ImageFilter.SHARPEN)      # 경계 뚜렷하게
+            # 5. 형태적 변환 적용 (Erosion & Dilation 유사 로직)
+            # MaxFilter는 팽창(Dilation) 효과를 주어 숫자의 끊긴 획을 연결합니다.
+            img = img.filter(ImageFilter.MaxFilter(3))
+            # MedianFilter로 경계면의 자잘한 노이즈를 매끄럽게 다듬습니다 (9-6 오인식 방지 핵심)
+            img = img.filter(ImageFilter.MedianFilter(3))
             
-            # 인식 수행 (PSM 6: 단일 텍스트 블록으로 인식하여 표 구조 유지)
+            # 6. 최종 선명화
+            img = img.filter(ImageFilter.SHARPEN)
+            
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
-            
         except Exception as e:
-            messagebox.showerror("Error", f"이미지 전처리 실패: {e}")
+            messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
@@ -170,10 +171,10 @@ class OTCalculator(ctk.CTk):
                 after_text = line[match.end():]
                 nums = num_pattern.findall(after_text)
                 
-                break_val = 60 # 기본값
+                break_val = 60 
                 if nums:
                     val1 = int(nums[0])
-                    # 90이 2로 읽히는 등 한자리 수로 잘못 읽혔을 경우 백업 로직
+                    # 한 자리수 오인식 백업 로직
                     if val1 < 10 and len(nums) > 1:
                         break_val = int(nums[1])
                     else:
