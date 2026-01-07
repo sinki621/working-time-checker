@@ -485,8 +485,8 @@ class OTCalculator(ctk.CTk):
             sample_img = Image.open(sample_path)
             
             # 이미지 크기 조정 (너무 크면 축소)
-            max_width = 1000
-            max_height = 700
+            max_width = 950
+            max_height = 550
             img_width, img_height = sample_img.size
             
             if img_width > max_width or img_height > max_height:
