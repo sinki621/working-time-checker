@@ -1,4 +1,6 @@
-customtkinter>=5.2.0
-Pillow>=10.0.0
-pytesseract>=0.3.10
-holidays>=0.40
+easyocr
+customtkinter
+Pillow
+numpy
+holidays
+pyinstaller
