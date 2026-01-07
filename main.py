@@ -102,8 +102,7 @@ class OTCalculator(ctk.CTk):
         
         self.tree.pack(side="left", fill="both", expand=True)
         
-        # 하단 요약 박스 크기 조정
-        self.summary_box = ctk.CTkTextbox(self, height=220, font=("Segoe UI", 15))
+        self.summary_box = ctk.CTkTextbox(self, height=250, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
     def show_sample(self):
@@ -172,22 +171,19 @@ class OTCalculator(ctk.CTk):
         
         total_net_sum = 0
         sum_x15, sum_x20, sum_x25 = 0, 0, 0
-        total_weighted_sum = 0
+        total_minus_hours = 0  # 유연근무용 마이너스 시간 합산
         holiday_dates = []
 
         for r in records:
             worked_min = 0
             h10, h15, h20, h25 = 0, 0, 0, 0
-            
             total_duration_min = int((r['end'] - r['start']).total_seconds() / 60)
             
             for m in range(total_duration_min):
                 if m < r['break_min']: continue
-                
                 check_time = (r['start'] + timedelta(minutes=m))
                 hour_now = check_time.hour
                 is_night = (hour_now >= 22 or hour_now < 6)
-                
                 worked_min += 1
                 is_over_8h = (worked_min > 480)
                 
@@ -210,6 +206,10 @@ class OTCalculator(ctk.CTk):
             net_h = h10 + h15 + h20 + h25
             weighted_day = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
             
+            # 마이너스 시간 계산 (8시간 미달분)
+            if not r['is_h'] and net_h < 8:
+                total_minus_hours += (8 - net_h)
+
             weekday_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
             date_str = f"{r['dt'].strftime('%m/%d')} ({weekday_name})"
             if r['is_h']: holiday_dates.append(date_str)
@@ -227,21 +227,27 @@ class OTCalculator(ctk.CTk):
             sum_x15 += h15
             sum_x20 += h20
             sum_x25 += h25
-            total_weighted_sum += weighted_day
 
-        # 요약 박스 텍스트 구성
+        # 1. 유연근무 적용: x1.5 합계에서 마이너스 시간 차감
+        final_x15 = max(0, sum_x15 - total_minus_hours)
+        
+        # 2. 최종 환산 OT 합계: (x1.5 * 1.5) + (x2.0 * 2.0) + (x2.5 * 2.5)
+        total_weighted_ot = (final_x15 * 1.5) + (sum_x20 * 2.0) + (sum_x25 * 2.5)
+
         self.summary_box.delete("0.0", "end")
         summary = f"1. 총 실근무 합계: {total_net_sum:.1f} 시간\n"
         summary += "------------------------------------------------------------\n"
-        summary += f"2. 배율별 OT 합계:\n"
-        summary += f"   - [x1.5]: {sum_x15:.1f} h\n"
+        summary += f"2. 배율별 OT 합계 (유연근무 상쇄 적용):\n"
+        summary += f"   - [x1.5]: {final_x15:.1f} h (부족분 {total_minus_hours:.1f}h 차감됨)\n"
         summary += f"   - [x2.0]: {sum_x20:.1f} h\n"
         summary += f"   - [x2.5]: {sum_x25:.1f} h\n"
         summary += "------------------------------------------------------------\n"
-        summary += f"3. 최종 환산 OT 합계 (가중치 합산): {total_weighted_sum:.1f} 시간\n"
+        summary += f"3. 최종 환산 OT 합계 (가중치 결과): {total_weighted_ot:.1f} 시간\n"
         
+        # Stand-by 문구 복구
         if holiday_dates:
-            summary += f"\n⚠️ [Stand-by 근무여부 확인 필요] 대상: {', '.join(holiday_dates)}"
+            summary += "\n⚠️ [Stand-by 여부 확인 필요]\n"
+            summary += f"대상 일자: {', '.join(holiday_dates)}"
         
         self.summary_box.insert("0.0", summary)
 
