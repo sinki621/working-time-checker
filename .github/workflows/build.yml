@@ -1,57 +1,33 @@
-name: Build OT calculator
+name: Build EXE with EasyOCR
 
-on: 
+on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ "main" ]
 
 jobs:
   build:
     runs-on: windows-latest
-    
+
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Checkout 코드
+      uses: actions/checkout@v3
+
+    - name: Python 설정
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-    
-    - name: Install Tesseract Engine
-      run: choco install tesseract-ocr -y
-    
-    - name: Install Dependencies
+        python-version: '3.9'
+
+    - name: 라이브러리 설치
       run: |
         python -m pip install --upgrade pip
-        pip install customtkinter Pillow pytesseract holidays pyinstaller
-    
-    - name: Prepare Assets
-      shell: pwsh
-      run: |
-        # Tesseract 엔진 복사
-        $installPath = "C:\Program Files\Tesseract-OCR"
-        New-Item -ItemType Directory -Force -Path "Tesseract-OCR"
-        xcopy "$installPath\*" "Tesseract-OCR\" /E /H /Y /I
-        
-        # sample.png가 없는 경우를 대비해 체크 (에러 방지)
-        if (!(Test-Path "sample.png")) {
-           Write-Host "Warning: sample.png not found. Please ensure it exists in root."
-        }
+        pip install -r requirements.txt
 
-    - name: Build EXE
-      shell: pwsh
+    - name: EXE 빌드 실행
       run: |
-        pyinstaller --noconfirm --onefile --windowed `
-          --add-data "Tesseract-OCR;Tesseract-OCR" `
-          --add-data "sample.png;." `
-          --collect-all customtkinter `
-          --collect-all holidays `
-          --hidden-import "holidays.countries.korea" `
-          --name "OTCalculator_KISHIN" main.py
-    
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+        pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" main.py
+
+    - name: 빌드 결과물 업로드
+      uses: actions/upload-artifact@v3
       with:
-        name: OT_Calculator
-        path: dist/OTCalculator_KISHIN.exe
+        name: OT_calculator_exe
+        path: dist/OT_calculator.exe
