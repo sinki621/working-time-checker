@@ -10,7 +10,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# DPI 인식 설정
+# DPI 인식 설정 (고해상도 모니터 대응)
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -31,13 +31,10 @@ class OTCalculator(ctk.CTk):
         ctk.set_appearance_mode("light")
         
         try:
-            # ✅ 라이브러리 내부 로직에 맡기되, 빌드 시 모든 파일을 포함시키도록 처리
+            # RapidOCR 초기화 (기본적으로 다국어 지원 모드)
             self.engine = RapidOCR()
         except Exception as e:
-            messagebox.showerror("OCR 엔진 오류", 
-                                f"엔진 초기화에 실패했습니다.\n"
-                                f"원인: {e}\n\n"
-                                f"모든 모델 파일(.onnx)이 포함되었는지 확인이 필요합니다.")
+            messagebox.showerror("OCR 엔진 오류", f"엔진 초기화 실패: {e}")
 
         self.setup_ui()
         self.bind('<Control-v>', lambda e: self.paste_from_clipboard())
@@ -84,16 +81,17 @@ class OTCalculator(ctk.CTk):
             img_np = np.array(img.convert('RGB'))
             result, _ = self.engine(img_np)
             if not result:
-                messagebox.showinfo("알림", "이미지에서 텍스트를 인식하지 못했습니다.")
+                messagebox.showinfo("알림", "인식된 텍스트가 없습니다.")
                 return
 
+            # Y좌표 기준으로 행 병합 로직 (한글 버전은 행 간격이 좁을 수 있어 30px로 확대)
             result.sort(key=lambda x: x[0][0][1])
             lines = []
             if result:
                 last_y = result[0][0][0][1]
                 current_line = []
                 for res in result:
-                    if abs(res[0][0][1] - last_y) < 25:
+                    if abs(res[0][0][1] - last_y) < 30:
                         current_line.append(res[1])
                     else:
                         lines.append(" ".join(current_line))
@@ -102,25 +100,42 @@ class OTCalculator(ctk.CTk):
                 lines.append(" ".join(current_line))
             self.parse_rows(lines)
         except Exception as e:
-            messagebox.showerror("Error", f"분석 오류: {e}")
+            messagebox.showerror("Error", f"분석 중 오류 발생: {e}")
 
     def parse_rows(self, lines):
         for item in self.tree.get_children(): self.tree.delete(item)
         year = int(self.year_var.get())
-        found = False
+        found_data = False
 
         for line in lines:
+            # 1. 모든 공백 제거 (인식률 향상)
             line_c = line.replace(" ", "")
-            # 날짜 및 시간 정규식 (한/영 공용)
+            
+            # 2. 날짜 추출 (MM/DD)
             date_m = re.search(r'(\d{1,2}/\d{1,2})', line_c)
             if not date_m: continue
             
+            # 3. 시간 범위 추출 (06:50-03:40)
             times = re.findall(r'\d{2}:\d{2}', line_c)
             if len(times) < 2: continue
             
-            h_val = re.findall(r'(\d+)(?:시간|h|H)', line_c)
-            m_val = re.findall(r'(\d+)(?:분|m|M)', line_c)
-            f_net = (int(h_val[0]) * 60 if h_val else 0) + (int(m_val[-1]) if m_val else 0)
+            # 4. 실근무 총 시간 추출 (한글 '시간/분' 및 영문 'h/m' 모두 대응)
+            # 한글 OCR 결과는 종종 '시 간' 처럼 깨지기도 하므로 숫자 패턴 위주로 분석
+            h_match = re.search(r'(\d+)(?:시간|시|h|H)', line_c)
+            m_match = re.search(r'(\d+)(?:분|m|M)', line_c)
+            
+            f_net = 0
+            if h_match: f_net += int(h_match.group(1)) * 60
+            if m_match: f_net += int(m_match.group(1))
+
+            # 만약 한글 키워드 인식이 실패했다면, 줄 마지막의 숫자 패턴을 재시도
+            if f_net == 0:
+                nums = re.findall(r'(\d+)', line_c)
+                if len(nums) >= 4: # 날짜(2)+시간(2) 외에 숫자가 더 있다면 총 시간으로 간주
+                    # 줄의 맨 끝에서 두 개의 숫자를 시/분으로 가정
+                    try:
+                        f_net = int(nums[-2]) * 60 + int(nums[-1])
+                    except: pass
 
             if f_net > 0:
                 try:
@@ -130,13 +145,15 @@ class OTCalculator(ctk.CTk):
                     if et < st: et += timedelta(days=1)
                     range_min = int((et-st).total_seconds()/60)
                     brk = range_min - f_net
+                    
                     dt = datetime.strptime(f"{year}/{date_m.group(1)}", "%Y/%m/%d")
                     self.insert_row(dt, st_s, et_s, f_net, brk)
-                    found = True
+                    found_data = True
                 except: pass
         
-        if not found:
-            messagebox.showinfo("알림", "근무 데이터를 찾지 못했습니다. 표 전체가 보이게 캡처해주세요.")
+        if not found_data:
+            messagebox.showwarning("인식 실패", "한글 버전에서 데이터를 찾지 못했습니다.\n표의 '총 시간' 열이 잘 보이게 캡처되었는지 확인해주세요.")
+            
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
@@ -153,11 +170,14 @@ class OTCalculator(ctk.CTk):
             st_s, et_s = v[1].split('-')
             st = datetime.strptime(st_s, "%H:%M"); et = datetime.strptime(et_s, "%H:%M")
             if et < st: et += timedelta(days=1)
+            
             h_m = re.search(r'(\d+)h', v[2]); m_m = re.search(r'(\d+)m', v[2])
             net_min = (int(h_m.group(1))*60 if h_m else 0) + (int(m_m.group(1)) if m_m else 0)
             range_min = int((et-st).total_seconds()/60); brk = range_min - net_min
+            
             h10, h15, h20, h25, w_cnt = 0, 0, 0, 0, 0
             is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
+            
             for m in range(range_min):
                 if m < brk: continue
                 c = st + timedelta(minutes=m); is_n = (c.hour >= 22 or c.hour < 6)
@@ -172,13 +192,16 @@ class OTCalculator(ctk.CTk):
                 elif w == 1.5: h15 += 1/60
                 elif w == 2.0: h20 += 1/60
                 elif w == 2.5: h25 += 1/60
+            
             row_net = net_min/60; total_net += row_net; sum15 += h15; sum20 += h20; sum25 += h25
             if not is_h and row_net < 8: total_minus += (8 - row_net)
             w_sum = (h10*1 + h15*1.5 + h20*2 + h25*2.5)
             self.tree.item(item, values=(v[0], v[1], f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{w_sum:.1f}h"))
-        adj_x15 = max(0, sum15 - total_minus); f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+        
+        adj_x15 = max(0, sum15 - total_minus)
+        f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
         self.summary_box.delete("0.0", "end")
-        self.summary_box.insert("0.0", f"1. 총 실근무: {total_net:.1f}h\n2. OT 합계: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 최종 환산 합계: {f_ot:.1f} 시간")
+        self.summary_box.insert("0.0", f"1. 총 실근무: {total_net:.1f}h\n2. OT: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 합계: {f_ot:.1f}h")
 
 if __name__ == "__main__":
     OTCalculator().mainloop()
