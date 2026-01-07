@@ -125,33 +125,29 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 3배 확대 (Digital Image에 가장 적합한 비율)
+            # 1. 4배 확대 (3배에서 4배로 상향)
+            # 90과 60이 뭉개지지 않도록 픽셀 공간을 더 확보합니다.
             w, h = img.size
-            img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
+            img = img.resize((w*4, h*4), Image.Resampling.LANCZOS)
             
-            # 2. Grayscale
+            # 2. Grayscale 변환
             img = ImageOps.grayscale(img)
             
-            # 3. [중요] Padding (테두리 여백) 추가
-            # OCR은 글자가 구석에 붙어있으면 6, 9를 찌그러진 것으로 인식함
-            img = ImageOps.expand(img, border=20, fill='white')
-
-            # 4. 부드러운 전처리 (Morphology 삭제)
-            # 스크린샷은 이미 깨끗하므로 과한 필터 대신 '보정'만 수행
-            # 가우시안 블러를 살짝 줘서 폰트의 계단 현상(Aliasing)을 없앱니다. 
-            # 이게 9와 6의 곡선을 부드럽게 만들어 오인식을 줄입니다.
-            img = img.filter(ImageFilter.GaussianBlur(radius=1))
+            # 3. [핵심 변경] 수동 이진화 제거 & 대비 극대화
+            # 0/255로 강제 변환하지 않고, 회색조를 유지하되 명암비를 강하게 줍니다.
+            # 이렇게 하면 획의 경계가 부드럽게 유지되어 9와 0이 붙지 않습니다.
+            img = ImageEnhance.Contrast(img).enhance(2.0)     # 대비 2배
+            img = ImageEnhance.Sharpness(img).enhance(2.0)    # 선명도 2배 (UnsharpMask 대신 기본 Sharpen 사용)
             
-            # 5. 대비 강조 (Auto Contrast)
-            # 검은색은 더 검게, 흰색은 더 희게 (Threshold 아님)
-            img = ImageOps.autocontrast(img, cutoff=2)
-            
-            # 6. 이진화 임계값 완화 (Threshold 200 -> 160)
-            # 160 정도로 낮춰야 얇은 획이 날아가지 않고 살아남습니다.
-            img = img.point(lambda p: 255 if p > 160 else 0)
+            # 4. Padding 유지 (필수)
+            # 글자가 이미지 끝에 붙어있으면 인식이 안되므로 흰색 여백 추가
+            img = ImageOps.expand(img, border=30, fill='white')
 
-            # Tesseract 실행
-            full_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 6')
+            # 5. Tesseract Whitelist 설정
+            # OCR이 'g', 'z', '?' 같은 문자로 추측하지 못하게 숫자와 관련 기호만 허용
+            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789/:-Mm'
+            
+            full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config) # 숫자는 eng 모델이 더 강함
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
@@ -174,21 +170,29 @@ class OTCalculator(ctk.CTk):
                 after_text = line[match.end():]
                 nums = num_pattern.findall(after_text)
                 
-                break_val = 60 # Default
+                break_val = 60 # 기본값
                 if nums:
                     val1 = int(nums[0])
-                    # 90이 2로 읽히는 경우에 대한 강력한 보정 로직
-                    # 보통 2, 6, 8 등으로 잘못 읽힘 -> 두번째 숫자 확인
-                    if val1 < 10 and len(nums) > 1:
-                        # 만약 뒤에 0이나 5가 있다면 합쳐서 생각 (예: 9 0 -> 90)
-                        if nums[1] in ['0', '5']:
+                    # [인식 오류 보정 로직 강화]
+                    # 90, 60이 '2'나 '6' 같은 한 자리 숫자로 인식되면 오류로 간주
+                    if val1 < 10: 
+                        if len(nums) > 1:
+                             # 뒤에 숫자가 더 있다면 (예: 9 0) 합침
                             break_val = int(str(val1) + nums[1])
                         else:
-                            break_val = int(nums[1])
+                            # 한 자리 숫자만 덜렁 있다면 휴게시간이 10분 미만일 리 없으므로 
+                            # 2 -> 60, 9 -> 60 등 안전하게 처리하거나, 
+                            # 혹은 인식된 숫자가 2라면 0이 탈락된 것으로 간주해 x30 추론 등은 위험하니
+                            # 일단 원본 값을 쓰되, 너무 작으면 기본값 적용 고려
+                            break_val = val1 if val1 > 0 else 60
                     else:
                         break_val = val1
                 
-                if break_val > 300: break_val = 60 
+                # 비정상적인 값 필터링 (너무 크거나 작으면 60분으로 리셋)
+                if break_val < 20 or break_val > 300: 
+                    # 단, 0분인 경우는 있을 수 있으니 제외하고, 2분 처럼 애매한 오인식만 타겟
+                    if break_val != 0: 
+                         break_val = 60 
 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
