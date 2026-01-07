@@ -41,7 +41,8 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
+        # 프로그램 이름 변경: OT Calculator
+        self.title("OT Calculator (Producer: KI.Shin)")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
@@ -125,33 +126,21 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # --- 고도화된 이미지 전처리 ---
-            # 1. 크기 확대 (3배 확대가 가장 안정적)
+            # 인식률 극대화를 위한 전처리 (3배 확대 + 이진화)
             w, h = img.size
             img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
-            
-            # 2. 그레이스케일 및 대비 강화
             gray = ImageOps.grayscale(img)
             enhancer = ImageEnhance.Contrast(gray).enhance(2.5)
-            
-            # 3. 이진화 (Thresholding) - 배경과 글자를 명확히 분리
-            # 200보다 밝으면 흰색, 아니면 검은색
+            # 이진화 처리로 노이즈 제거
             img_bin = enhancer.point(lambda p: 255 if p > 200 else 0)
-            
-            # 4. 노이즈 제거 (약간의 블러 후 다시 선명하게)
             img_final = img_bin.filter(ImageFilter.SMOOTH_MORE).filter(ImageFilter.SHARPEN)
             
-            # Tesseract 설정: 숫자가 많은 표 형식이므로 psm 6 사용 및 숫자 관련 whitelist 적용 추천
-            # 다만 한글 요일도 읽어야 하므로 기본 설정에서 psm 6만 강하게 적용
-            custom_config = r'--psm 6'
-            full_text = pytesseract.image_to_string(img_final, lang='kor+eng', config=custom_config)
-            
+            full_text = pytesseract.image_to_string(img_final, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
     def calculate_data(self, text):
-        # 날짜와 시간 형식을 더 유연하게 잡음
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
         num_pattern = re.compile(r'\d+')
         
@@ -166,23 +155,18 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                
-                # 휴게시간 추출 고도화: 
-                # 시간 범위 뒤에 나오는 숫자 중 '분'이나 'm' 근처에 있는 숫자를 우선 타겟팅
                 after_text = line[match.end():]
-                # '분'이나 'm' 같은 단위가 붙어있을 경우 숫자가 깨지는걸 방지하기 위해 정제
                 nums = num_pattern.findall(after_text)
                 
                 break_val = 60 # 기본값
                 if nums:
-                    # 첫 번째 숫자가 너무 작거나(2 등) 이상하면 두 번째 숫자를 확인하는 백업 로직
                     val1 = int(nums[0])
-                    if val1 < 10 and len(nums) > 1: # '2' 처럼 잘못 읽은 경우 옆의 숫자 확인
+                    # 90이 2로 읽히는 등 한자리 수로 잘못 읽혔을 경우 백업 로직
+                    if val1 < 10 and len(nums) > 1:
                         break_val = int(nums[1])
                     else:
                         break_val = val1
                 
-                # 비정상적인 휴게시간(너무 크거나 작음) 보정
                 if break_val > 300: break_val = 60 
 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
