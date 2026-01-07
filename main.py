@@ -10,7 +10,15 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# DPI 및 환경 설정
+# [중요] PyInstaller 실행 환경에서 경로를 올바르게 잡기 위한 함수
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# DPI 설정
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -26,18 +34,18 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
+        # 요구사항 반영: 프로그램 이름 변경
         self.title("OT calculator (Producer: KI.Shin)")
-        self.geometry("1600(w)x950(h)")
+        self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
         try:
-            # RapidOCR 엔진 초기화
+            # RapidOCR 초기화
             self.engine = RapidOCR()
         except Exception as e:
-            messagebox.showerror("OCR Error", f"RapidOCR 초기화 실패: {e}")
+            messagebox.showerror("OCR Error", f"RapidOCR 초기화 실패:\n{e}")
 
         self.setup_ui()
-        
         self.bind('<Control-v>', lambda e: self.paste_from_clipboard())
         self.bind('<Control-V>', lambda e: self.paste_from_clipboard())
 
@@ -52,8 +60,6 @@ class OTCalculator(ctk.CTk):
         ctk.CTkButton(top_bar, text="📁 Load File", command=self.load_image, width=140).pack(side="left", padx=10)
         ctk.CTkButton(top_bar, text="📋 Paste (Ctrl+V)", command=self.paste_from_clipboard, fg_color="#2ecc71", width=160).pack(side="left", padx=10)
         
-        ctk.CTkLabel(top_bar, text="* 인식 실패 시 로그 확인", font=("Segoe UI", 12, "italic"), text_color="gray").pack(side="right", padx=20)
-
         style = ttk.Style()
         style.theme_use("default")
         style.configure("Treeview", rowheight=35, font=("Segoe UI", 11))
@@ -67,23 +73,9 @@ class OTCalculator(ctk.CTk):
             self.tree.heading(cid, text=txt)
             self.tree.column(cid, width=w, anchor="center")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.bind("<Double-1>", self.on_double_click)
 
-        self.summary_box = ctk.CTkTextbox(self, height=200, font=("Segoe UI", 15))
+        self.summary_box = ctk.CTkTextbox(self, height=180, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
-
-    def on_double_click(self, event):
-        item = self.tree.identify_row(event.y)
-        column = self.tree.identify_column(event.x)
-        if column == "#3":
-            x, y, w, h = self.tree.bbox(item, column)
-            entry = tk.Entry(self.tree)
-            entry.insert(0, self.tree.item(item, 'values')[2])
-            entry.place(x=x, y=y, width=w, height=h)
-            entry.focus_set()
-            def save(e):
-                self.tree.set(item, column=column, value=entry.get()); self.recalculate_from_table(); entry.destroy()
-            entry.bind("<Return>", save); entry.bind("<FocusOut>", lambda e: entry.destroy())
 
     def load_image(self):
         f = filedialog.askopenfilename()
@@ -97,20 +89,15 @@ class OTCalculator(ctk.CTk):
         try:
             img_np = np.array(img.convert('RGB'))
             result, _ = self.engine(img_np)
-            
-            if not result:
-                messagebox.showinfo("결과", "이미지에서 텍스트를 찾지 못했습니다.")
-                return
+            if not result: return
 
-            # Y좌표 기준으로 정렬하여 행 단위 그룹화 로직 강화
             result.sort(key=lambda x: x[0][0][1])
             lines = []
             if result:
                 last_y = result[0][0][0][1]
                 current_line = []
                 for res in result:
-                    # 행 간격 오차 범위를 20px로 확대
-                    if abs(res[0][0][1] - last_y) < 20:
+                    if abs(res[0][0][1] - last_y) < 25:
                         current_line.append(res[1])
                     else:
                         lines.append(" ".join(current_line))
@@ -118,70 +105,50 @@ class OTCalculator(ctk.CTk):
                         last_y = res[0][0][1]
                 lines.append(" ".join(current_line))
 
-            # 디버깅: 인식된 모든 행을 콘솔에 출력 (필요시)
-            print("--- OCR 인식 결과 ---")
-            for idx, ln in enumerate(lines): print(f"Line {idx}: {ln}")
-
             self.parse_rows(lines)
         except Exception as e:
-            messagebox.showerror("Error", f"이미지 분석 중 오류: {e}")
+            messagebox.showerror("Error", f"분석 오류: {e}")
 
     def parse_rows(self, lines):
         for item in self.tree.get_children(): self.tree.delete(item)
         year = int(self.year_var.get())
-        found_count = 0
+        found = False
 
         for line in lines:
-            # 1. 날짜 추출 (12/31 등)
-            date_m = re.search(r'(\d{1,2}/\d{1,2})', line)
+            line_clean = line.replace(" ", "")
+            date_m = re.search(r'(\d{1,2}/\d{1,2})', line_clean)
             if not date_m: continue
             
-            date_str = date_m.group(1)
-            
-            # 2. 근무 시간 범위 추출 (06:50 - 03:40)
-            times = re.findall(r'\d{2}:\d{2}', line)
+            times = re.findall(r'\d{2}:\d{2}', line_clean)
             if len(times) < 2: continue
             
-            f_range = f"{times[0]}-{times[1]}"
+            # 한글/영문 숫자 추출 보강 (18시간 50분 / 18h 50m)
+            h_val = re.findall(r'(\d+)(?:시간|h|H)', line_clean)
+            m_val = re.findall(r'(\d+)(?:분|m|M)', line_clean)
             
-            # 3. 실근무 총 시간 추출 (한글/영문 공용 정규식 강화)
-            # 숫자 뒤에 '시간', 'h', '분', 'm'이 오는지 확인 (공백 허용)
-            h_match = re.search(r'(\d+)\s*(?:시간|h|H)', line)
-            m_match = re.search(r'(\d+)\s*(?:분|m|M)', line)
-            
-            # '8시간'만 있고 '분'이 없는 경우도 처리
             f_net = 0
-            if h_match or m_match:
-                f_net = (int(h_match.group(1)) if h_match else 0)*60 + (int(m_match.group(1)) if m_match else 0)
-            
-            # 만약 위 정규식으로 안 잡히면, 줄의 마지막 근처에 있는 "숫자h 숫자m" 형태 재시도
-            if f_net == 0:
-                alt_match = re.search(r'(\d+)\s*[hH]\s*(\d+)\s*[mM]', line)
-                if alt_match:
-                    f_net = int(alt_match.group(1))*60 + int(alt_match.group(2))
+            if h_val: f_net += int(h_val[0]) * 60
+            if m_val: f_net += int(m_val[-1])
 
-            if f_range and f_net > 0:
+            if f_net > 0:
                 try:
                     st_s, et_s = times[0], times[1]
                     st = datetime.strptime(st_s, "%H:%M")
                     et = datetime.strptime(et_s, "%H:%M")
                     if et < st: et += timedelta(days=1)
-                    
                     range_min = int((et-st).total_seconds()/60)
                     brk = range_min - f_net
                     
-                    dt = datetime.strptime(f"{year}/{date_str}", "%Y/%m/%d")
+                    dt = datetime.strptime(f"{year}/{date_m.group(1)}", "%Y/%m/%d")
                     self.insert_row(dt, st_s, et_s, f_net, brk)
-                    found_count += 1
+                    found = True
                 except: pass
         
-        if found_count == 0:
-            messagebox.showinfo("알림", "날짜와 실근무 시간이 포함된 행을 찾지 못했습니다.\n캡처 범위를 확인해 주세요.")
-            
+        if not found:
+            messagebox.showinfo("알림", "날짜와 실근무 시간이 포함된 행을 찾지 못했습니다.")
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
-        is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
         w_name = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
         d_str = f"{dt.strftime('%m/%d')} ({w_name})"
         self.tree.insert("", "end", values=(d_str, f"{s_t}-{e_t}", f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", "", "", "", ""))
@@ -191,19 +158,15 @@ class OTCalculator(ctk.CTk):
         year = int(self.year_var.get())
         for item in self.tree.get_children():
             v = self.tree.item(item, 'values')
-            dt_raw = v[0].split(' ')[0]
-            dt = datetime.strptime(f"{year}/{dt_raw}", "%Y/%m/%d")
+            dt = datetime.strptime(f"{year}/{v[0].split(' ')[0]}", "%Y/%m/%d")
             st_s, et_s = v[1].split('-')
             st = datetime.strptime(st_s, "%H:%M"); et = datetime.strptime(et_s, "%H:%M")
             if et < st: et += timedelta(days=1)
-            
             h_m = re.search(r'(\d+)h', v[2]); m_m = re.search(r'(\d+)m', v[2])
             net_min = (int(h_m.group(1))*60 if h_m else 0) + (int(m_m.group(1)) if m_m else 0)
             range_min = int((et-st).total_seconds()/60); brk = range_min - net_min
-            
             h10, h15, h20, h25, w_cnt = 0, 0, 0, 0, 0
             is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
-            
             for m in range(range_min):
                 if m < brk: continue
                 c = st + timedelta(minutes=m); is_n = (c.hour >= 22 or c.hour < 6)
@@ -218,17 +181,13 @@ class OTCalculator(ctk.CTk):
                 elif w == 1.5: h15 += 1/60
                 elif w == 2.0: h20 += 1/60
                 elif w == 2.5: h25 += 1/60
-            
             row_net = net_min/60; total_net += row_net; sum15 += h15; sum20 += h20; sum25 += h25
             if not is_h and row_net < 8: total_minus += (8 - row_net)
             w_sum = (h10*1 + h15*1.5 + h20*2 + h25*2.5)
             self.tree.item(item, values=(v[0], v[1], f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{w_sum:.1f}h"))
-        
-        adj_x15 = max(0, sum15 - total_minus)
-        f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+        adj_x15 = max(0, sum15 - total_minus); f_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
         self.summary_box.delete("0.0", "end")
-        self.summary_box.insert("0.0", f"1. 총 실근무: {total_net:.1f}h\n2. OT: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 합계: {f_ot:.1f}h")
+        self.summary_box.insert("0.0", f"1. 총 실근무: {total_net:.1f}h\n2. OT 합계: x1.5({adj_x15:.1f}h), x2.0({sum20:.1f}h), x2.5({sum25:.1f}h)\n3. 최종 환산 합계: {f_ot:.1f} 시간")
 
 if __name__ == "__main__":
-    app = OTCalculator()
-    app.mainloop()
+    OTCalculator().mainloop()
