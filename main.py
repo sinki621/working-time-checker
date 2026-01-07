@@ -41,7 +41,6 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 프로그램 이름 반영: OT calculator
         self.title("OT calculator (Producer: KI.Shin)")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
@@ -126,28 +125,30 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 이미지 확대 (인식률 향상의 기초)
+            # 1. 3.5배 확대 (9-6 구분에는 해상도가 핵심)
             w, h = img.size
-            img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
+            img = img.resize((int(w*3.5), int(h*3.5)), Image.Resampling.LANCZOS)
             
-            # 2. Gray scale 변환
+            # 2. Gray scale 및 대비 강화
             img = ImageOps.grayscale(img)
+            img = ImageEnhance.Contrast(img).enhance(2.0)
             
-            # 3. 대비 극대화 (Binary 변환 전 단계)
-            img = ImageEnhance.Contrast(img).enhance(3.5)
+            # 3. 선명도 우선 처리 (Unsharp Mask 기법)
+            # 숫자의 경계선을 날카롭게 세워 9의 머리와 6의 몸통 구멍을 보존합니다.
+            img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
             
-            # 4. Binary(이진화) 변환 - 9와 6의 미세한 꼬리부분 노이즈 제거
-            img = img.point(lambda p: 255 if p > 190 else 0)
+            # 4. 이진화 (Thresholding)
+            # 너무 어둡게 잡지 않아 획이 붙는 현상을 방지합니다.
+            img = img.point(lambda p: 255 if p > 185 else 0)
             
-            # 5. 형태적 변환 적용 (Erosion & Dilation 유사 로직)
-            # MaxFilter는 팽창(Dilation) 효과를 주어 숫자의 끊긴 획을 연결합니다.
-            img = img.filter(ImageFilter.MaxFilter(3))
-            # MedianFilter로 경계면의 자잘한 노이즈를 매끄럽게 다듬습니다 (9-6 오인식 방지 핵심)
-            img = img.filter(ImageFilter.MedianFilter(3))
+            # 5. 형태적 보정 (MinFilter: Erosion 효과)
+            # 획이 너무 두꺼워져 구멍이 메워지는 것을 방지하기 위해 획을 살짝 깎습니다.
+            img = img.filter(ImageFilter.MinFilter(3)) 
             
-            # 6. 최종 선명화
-            img = img.filter(ImageFilter.SHARPEN)
+            # 6. 최종 노이즈 제거
+            img = img.filter(ImageFilter.SMOOTH)
             
+            # Tesseract 설정 최적화: 숫자가 중요하므로 psm 6 강제
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
@@ -174,7 +175,7 @@ class OTCalculator(ctk.CTk):
                 break_val = 60 
                 if nums:
                     val1 = int(nums[0])
-                    # 한 자리수 오인식 백업 로직
+                    # 90이 20이나 60으로 오인되는 것 방지
                     if val1 < 10 and len(nums) > 1:
                         break_val = int(nums[1])
                     else:
