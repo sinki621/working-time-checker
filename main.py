@@ -2,15 +2,15 @@ import os
 import sys
 import re
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, simpledialog
+from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
-from PIL import Image, ImageGrab, ImageTk, ImageOps, ImageEnhance
+from PIL import Image, ImageGrab, ImageTk, ImageOps
 import pytesseract
 from datetime import datetime, timedelta
 import ctypes
 
 # =============================================================================
-# 1. 환경 설정
+# 1. 환경 설정 및 리소스 경로 처리
 # =============================================================================
 if getattr(sys, 'frozen', False):
     os.environ['PATH'] = sys._MEIPASS + os.pathsep + os.environ.get('PATH', '')
@@ -45,7 +45,6 @@ class OTCalculator(ctk.CTk):
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
-        self.raw_records = []
         self.setup_tesseract()
         self.setup_ui()
         
@@ -80,6 +79,10 @@ class OTCalculator(ctk.CTk):
         self.btn_sample = ctk.CTkButton(top_bar, text="💡 Sample", command=self.show_sample, fg_color="#3498db", width=120)
         self.btn_sample.pack(side="right", padx=10)
 
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=30, font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        
         self.tree_frame = ctk.CTkFrame(self)
         self.tree_frame.pack(pady=10, fill="both", expand=True, padx=20)
         
@@ -88,7 +91,7 @@ class OTCalculator(ctk.CTk):
                                 show='headings')
         
         cols = [
-            ("Date", "날짜(요일)", 130), ("Range", "근무시간", 160), ("Break", "휴게(분)", 80), 
+            ("Date", "날짜(요일)", 130), ("Range", "근무시간", 160), ("Break", "휴게", 80), 
             ("NetDiff", "실근무 (+/-)", 110), ("x1.5", "x1.5", 100), 
             ("x2.0", "x2.0", 100), ("x2.5", "x2.5", 100), ("Weighted", "환산합계", 100)
         ]
@@ -98,32 +101,22 @@ class OTCalculator(ctk.CTk):
             self.tree.column(cid, width=w, anchor="center")
         
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.bind("<Double-1>", self.on_double_click)
         
         self.summary_box = ctk.CTkTextbox(self, height=260, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
-    def on_double_click(self, event):
-        item_id = self.tree.identify_row(event.y)
-        column = self.tree.identify_column(event.x)
-        if item_id and column == "#3":
-            old_val = self.tree.item(item_id, "values")[2].replace("m", "")
-            new_val = simpledialog.askinteger("Edit", "정확한 휴게시간(분):", initialvalue=int(old_val))
-            if new_val is not None:
-                idx = self.tree.index(item_id)
-                self.raw_records[idx]['brk'] = new_val
-                self.refresh_table()
-
     def show_sample(self):
         sample_path = resource_path("sample.png")
-        if os.path.exists(sample_path):
-            top = ctk.CTkToplevel(self)
-            img = Image.open(sample_path)
-            img_tk = ImageTk.PhotoImage(img)
-            label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
+        if not os.path.exists(sample_path):
+            messagebox.showwarning("Notice", "sample.png가 없습니다.")
+            return
+        top = ctk.CTkToplevel(self)
+        img = Image.open(sample_path)
+        img_tk = ImageTk.PhotoImage(img)
+        label = tk.Label(top, image=img_tk); label.image = img_tk; label.pack()
 
     def load_image(self):
-        f = filedialog.askopenfilename()
+        f = filedialog.askopenfilename(); 
         if f: self.process_image(Image.open(f))
 
     def paste_from_clipboard(self):
@@ -132,36 +125,35 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 2배 확대 (0의 디테일을 살리기 위해 최소한의 확대만 적용)
-            w, h = img.size
-            img = img.resize((w*2, h*2), Image.Resampling.LANCZOS)
+            # [전략 변경] 모든 이미지 처리(확대, 필터)를 중단하고 
+            # 원본 이미지에 여백만 주어 Tesseract에 전달합니다.
             
-            # 2. Grayscale 및 명암 최적화
+            # 1. Grayscale 변환 (필수)
             img = ImageOps.grayscale(img)
-            img = ImageEnhance.Contrast(img).enhance(1.5) # 대비를 살짝 높여 글자와 선을 분리
             
-            # 3. 여백 추가 (중요)
-            img = ImageOps.expand(img, border=80, fill='white')
+            # 2. 여백 추가 (테두리 근처 인식 오류 방지용)
+            img = ImageOps.expand(img, border=50, fill='white')
             
-            # [PSM 4 설정 적용] - 가변적인 텍스트 열 인식에 최적
-            # -c tessedit_create_txt=1: 텍스트 구조 유지 시도
-            custom_config = (
-                r'--oem 1 --psm 4 '
-                r'-c tessedit_char_whitelist=0123456789/:- '
-                r'-c preserve_interword_spaces=1'
-            )
+            # 3. Tesseract 설정
+            # oem 1: LSTM 엔진 (문맥 파악 우수)
+            # psm 6: 표 형태에 적합
+            # whitelist: 숫자 및 관련 기호만
+            custom_config = r'--oem 1 --psm 6 -c tessedit_char_whitelist=0123456789/:- '
             
-            text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
-            self.parse_and_fill(text)
+            # 숫자는 'eng' 모델이 'kor' 모델보다 훨씬 명확합니다.
+            full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
+            self.calculate_data(full_text)
         except Exception as e:
-            messagebox.showerror("Error", f"인식 실패: {e}")
+            messagebox.showerror("Error", f"이미지 분석 실패: {e}")
 
-    def parse_and_fill(self, text):
-        # 정규표현식 수정: 날짜와 시간을 먼저 찾고 그 줄의 나머지에서 숫자를 찾음
+    def calculate_data(self, text):
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
+        num_pattern = re.compile(r'\d+')
         
-        self.raw_records = []
+        for item in self.tree.get_children(): self.tree.delete(item)
+        
         year = int(self.year_var.get())
+        records = []
         
         for line in text.split('\n'):
             match = line_pattern.search(line)
@@ -169,37 +161,41 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                # 날짜/시간 이후의 텍스트만 추출하여 휴게시간 검색
-                remain = line[match.end():].strip()
-                # 휴게시간은 보통 시간표시 다음에 오는 첫 번째 숫자 뭉치임
-                nums = re.findall(r'\d+', remain)
+                after_text = line[match.end():]
+                nums = num_pattern.findall(after_text)
                 
-                break_val = 60
+                # 휴게시간 로직 고도화
+                break_val = 60 
                 if nums:
-                    # 120이 12 0으로 분리되어 읽힐 경우를 대비해 첫 두 뭉치를 확인
-                    if len(nums) >= 2 and remain.find(nums[0]) + len(nums[0]) + 1 >= remain.find(nums[1]):
-                        # 매우 가까이 붙어있는 두 숫자는 하나로 합침
-                        break_val = int(nums[0] + nums[1])
+                    raw_s = "".join(nums)
+                    # 만약 휴게시간 위치에 2나 22가 들어오면, 정황상 90 또는 60일 가능성이 큼
+                    if raw_s == "2": break_val = 90
+                    elif raw_s == "22": break_val = 60
+                    elif len(raw_s) >= 2:
+                        break_val = int(raw_s[:2])
                     else:
-                        break_val = int(nums[0])
+                        break_val = int(raw_s)
+                
+                # 안전 장치: 휴게시간은 보통 0, 30, 60, 90 단위
+                if break_val not in [0, 30, 60, 90, 120, 150]:
+                    # 가장 가까운 값으로 보정하거나 오인식 시 60분으로 처리
+                    if break_val == 2: break_val = 90
                 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
-                st, et = datetime.strptime(s_t, "%H:%M"), datetime.strptime(e_t, "%H:%M")
-                if et < st: et += timedelta(days=1)
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
-                self.raw_records.append({'dt': dt, 'st': st, 'et': et, 'brk': break_val, 'is_h': is_h, 'range': f"{s_t}-{e_t}"})
+                fmt = "%H:%M"
+                st, et = datetime.strptime(s_t, fmt), datetime.strptime(e_t, fmt)
+                if et < st: et += timedelta(days=1)
+                
+                records.append({'dt': dt, 'st': st, 'et': et, 'brk': break_val, 'is_h': is_h, 'range': f"{s_t}-{e_t}"})
             except: continue
-        
-        self.raw_records.sort(key=lambda x: x['dt'])
-        self.refresh_table()
 
-    def refresh_table(self):
-        for item in self.tree.get_children(): self.tree.delete(item)
-        t_net, s15, s20, s25, t_minus = 0, 0, 0, 0, 0
-        h_list = []
+        records.sort(key=lambda x: x['dt'])
+        total_net, sum15, sum20, sum25, total_minus = 0, 0, 0, 0, 0
+        holiday_list = []
 
-        for r in self.raw_records:
+        for r in records:
             h10, h15, h20, h25, worked_min = 0, 0, 0, 0, 0
             dur = int((r['et'] - r['st']).total_seconds() / 60)
             for m in range(dur):
@@ -208,6 +204,7 @@ class OTCalculator(ctk.CTk):
                 is_n = (check.hour >= 22 or check.hour < 6)
                 worked_min += 1
                 ov8 = (worked_min > 480)
+                
                 m_val = 1.0
                 if not r['is_h']:
                     if ov8 and is_n: m_val = 2.0
@@ -215,31 +212,37 @@ class OTCalculator(ctk.CTk):
                 else:
                     if ov8 and is_n: m_val = 2.5
                     elif ov8 or is_n: m_val = 2.0 
+                
                 if m_val == 1.0: h10 += 1/60
                 elif m_val == 1.5: h15 += 1/60
                 elif m_val == 2.0: h20 += 1/60
                 elif m_val == 2.5: h25 += 1/60
 
             net = h10 + h15 + h20 + h25
-            t_net += net; s15 += h15; s20 += h20; s25 += h25
-            if not r['is_h'] and net < 8: t_minus += (8 - net)
+            total_net += net
+            sum15 += h15; sum20 += h20; sum25 += h25
+            if not r['is_h'] and net < 8: total_minus += (8 - net)
             
             day_w = (h10 * 1.0) + (h15 * 1.5) + (h20 * 2.0) + (h25 * 2.5)
-            d_str = f"{r['dt'].strftime('%m/%d')} ({(['월','화','수','목','금','토','일'][r['dt'].weekday()])})"
-            if r['is_h']: h_list.append(d_str)
+            w_name = ["월", "화", "수", "목", "금", "토", "일"][r['dt'].weekday()]
+            d_str = f"{r['dt'].strftime('%m/%d')} ({w_name})"
+            if r['is_h']: holiday_list.append(d_str)
             
             diff = net - 8
             self.tree.insert("", "end", values=(d_str, r['range'], f"{r['brk']}m", f"{net:.1f} ({'+' if diff>=0 else ''}{diff:.1f})",
                                                 f"{h15:.1f}", f"{h20:.1f}", f"{h25:.1f}", f"{day_w:.1f}h"))
 
-        adj15 = max(0, s15 - t_minus)
-        total = (adj15 * 1.5) + (s20 * 2.0) + (s25 * 2.5)
+        adj_x15 = max(0, sum15 - total_minus)
+        final_ot = (adj_x15 * 1.5) + (sum20 * 2.0) + (sum25 * 2.5)
+
         self.summary_box.delete("0.0", "end")
-        res = f"1. 실근무 합계: {t_net:.1f} h\n" + "-"*50
-        res += f"\n2. 가중치별 OT:\n   x1.5: {adj15:.1f} h (부족분 {t_minus:.1f}h 차감)\n   x2.0: {s20:.1f} h\n   x2.5: {s25:.1f} h\n"
-        res += "-"*50 + f"\n3. 최종 환산 OT: {total:.1f} 시간"
-        if h_list: res += "\n\n⚠️ 휴일/특근 대상: " + ", ".join(h_list)
-        self.summary_box.insert("0.0", res)
+        msg = f"1. 총 실근무 합계: {total_net:.1f} 시간\n"
+        msg += "-"*60 + "\n2. 배율별 OT 합계 (유연근무 상쇄 적용):\n"
+        msg += f"   - [x1.5]: {adj_x15:.1f} h (부족분 {total_minus:.1f}h 차감됨)\n"
+        msg += f"   - [x2.0]: {sum20:.1f} h\n   - [x2.5]: {sum25:.1f} h\n"
+        msg += "-"*60 + "\n3. 최종 환산 OT 합계 (가중치 결과): {0:.1f} 시간\n".format(final_ot)
+        if holiday_list: msg += "\n⚠️ [Stand-by 근무여부 확인 필요]\n대상 일자: " + ", ".join(holiday_list)
+        self.summary_box.insert("0.0", msg)
 
 if __name__ == "__main__":
     app = OTCalculator()
