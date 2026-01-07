@@ -10,13 +10,23 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# [중요] PyInstaller 실행 환경에서 경로를 올바르게 잡기 위한 함수
-def resource_path(relative_path):
-    try:
+# 1. 경로 검증 함수
+def check_and_get_resource(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller 임시 폴더 경로
         base_path = sys._MEIPASS
-    except Exception:
+    else:
+        # 일반 파이썬 실행 경로
         base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+    
+    full_path = os.path.join(base_path, relative_path)
+    exists = os.path.exists(full_path)
+    
+    # 사용자에게 경로 존재 여부를 알림 (검증용)
+    messagebox.showinfo("시스템 진단", 
+                        f"검사 경로: {full_path}\n"
+                        f"파일 존재 여부: {'✅ 찾음' if exists else '❌ 없음'}")
+    return full_path if exists else None
 
 # DPI 설정
 try:
@@ -34,16 +44,23 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 요구사항 반영: 프로그램 이름 변경
         self.title("OT calculator (Producer: KI.Shin)")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
+        # 2. 초기화 전 검증 단계
+        config_rel_path = os.path.join("rapidocr_onnxruntime", "config.yaml")
+        verified_path = check_and_get_resource(config_rel_path)
+        
         try:
-            # RapidOCR 초기화
-            self.engine = RapidOCR()
+            if verified_path:
+                # 확인된 경로로 엔진 초기화
+                self.engine = RapidOCR(config_path=verified_path)
+            else:
+                # 파일이 없을 경우 기본값 시도 (여기서 보통 에러 발생)
+                self.engine = RapidOCR()
         except Exception as e:
-            messagebox.showerror("OCR Error", f"RapidOCR 초기화 실패:\n{e}")
+            messagebox.showerror("OCR Error", f"엔진 초기화 실패!\n에러 내용: {e}")
 
         self.setup_ui()
         self.bind('<Control-v>', lambda e: self.paste_from_clipboard())
@@ -104,7 +121,6 @@ class OTCalculator(ctk.CTk):
                         current_line = [res[1]]
                         last_y = res[0][0][1]
                 lines.append(" ".join(current_line))
-
             self.parse_rows(lines)
         except Exception as e:
             messagebox.showerror("Error", f"분석 오류: {e}")
@@ -115,20 +131,16 @@ class OTCalculator(ctk.CTk):
         found = False
 
         for line in lines:
-            line_clean = line.replace(" ", "")
-            date_m = re.search(r'(\d{1,2}/\d{1,2})', line_clean)
+            line_c = line.replace(" ", "")
+            date_m = re.search(r'(\d{1,2}/\d{1,2})', line_c)
             if not date_m: continue
             
-            times = re.findall(r'\d{2}:\d{2}', line_clean)
+            times = re.findall(r'\d{2}:\d{2}', line_c)
             if len(times) < 2: continue
             
-            # 한글/영문 숫자 추출 보강 (18시간 50분 / 18h 50m)
-            h_val = re.findall(r'(\d+)(?:시간|h|H)', line_clean)
-            m_val = re.findall(r'(\d+)(?:분|m|M)', line_clean)
-            
-            f_net = 0
-            if h_val: f_net += int(h_val[0]) * 60
-            if m_val: f_net += int(m_val[-1])
+            h_val = re.findall(r'(\d+)(?:시간|h|H)', line_c)
+            m_val = re.findall(r'(\d+)(?:분|m|M)', line_c)
+            f_net = (int(h_val[0]) * 60 if h_val else 0) + (int(m_val[-1]) if m_val else 0)
 
             if f_net > 0:
                 try:
@@ -138,17 +150,17 @@ class OTCalculator(ctk.CTk):
                     if et < st: et += timedelta(days=1)
                     range_min = int((et-st).total_seconds()/60)
                     brk = range_min - f_net
-                    
                     dt = datetime.strptime(f"{year}/{date_m.group(1)}", "%Y/%m/%d")
                     self.insert_row(dt, st_s, et_s, f_net, brk)
                     found = True
                 except: pass
         
         if not found:
-            messagebox.showinfo("알림", "날짜와 실근무 시간이 포함된 행을 찾지 못했습니다.")
+            messagebox.showinfo("알림", "데이터 추출 실패. 표 형식을 확인해주세요.")
         self.recalculate_from_table()
 
     def insert_row(self, dt, s_t, e_t, net_min, brk):
+        is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
         w_name = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
         d_str = f"{dt.strftime('%m/%d')} ({w_name})"
         self.tree.insert("", "end", values=(d_str, f"{s_t}-{e_t}", f"{int(net_min//60)}h {int(net_min%60)}m", f"{int(brk)}m", "", "", "", ""))
