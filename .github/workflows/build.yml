@@ -10,10 +10,10 @@ jobs:
 
     steps:
     - name: Checkout 코드
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4 # v4로 업데이트
 
     - name: Python 설정
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # v5로 업데이트
       with:
         python-version: '3.9'
 
@@ -28,14 +28,13 @@ jobs:
 
     - name: PyInstaller 빌드 (모델 포함)
       run: |
-        # --add-data "원본경로;대상경로" 옵션으로 모델 폴더 포함
-        # Windows 환경이므로 세미콜론(;)을 사용합니다.
+        # --add-data "원본;대상" 형식을 사용하여 models 폴더를 내부 리소스로 삽입
         pyinstaller --noconfirm --onefile --windowed --name "OT_calculator" `
         --add-data "models;models" `
         main.py
 
     - name: 빌드 결과물 업로드
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4 # 여기서 발생한 v3 에러 해결 (v4로 교체)
       with:
         name: OT_calculator_Full_Pack
         path: dist/OT_calculator.exe
