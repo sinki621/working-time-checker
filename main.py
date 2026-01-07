@@ -125,30 +125,32 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 3.5배 확대 (9-6 구분에는 해상도가 핵심)
+            # 1. 3배 확대 (Digital Image에 가장 적합한 비율)
             w, h = img.size
-            img = img.resize((int(w*3.5), int(h*3.5)), Image.Resampling.LANCZOS)
+            img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
             
-            # 2. Gray scale 및 대비 강화
+            # 2. Grayscale
             img = ImageOps.grayscale(img)
-            img = ImageEnhance.Contrast(img).enhance(2.0)
             
-            # 3. 선명도 우선 처리 (Unsharp Mask 기법)
-            # 숫자의 경계선을 날카롭게 세워 9의 머리와 6의 몸통 구멍을 보존합니다.
-            img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+            # 3. [중요] Padding (테두리 여백) 추가
+            # OCR은 글자가 구석에 붙어있으면 6, 9를 찌그러진 것으로 인식함
+            img = ImageOps.expand(img, border=20, fill='white')
+
+            # 4. 부드러운 전처리 (Morphology 삭제)
+            # 스크린샷은 이미 깨끗하므로 과한 필터 대신 '보정'만 수행
+            # 가우시안 블러를 살짝 줘서 폰트의 계단 현상(Aliasing)을 없앱니다. 
+            # 이게 9와 6의 곡선을 부드럽게 만들어 오인식을 줄입니다.
+            img = img.filter(ImageFilter.GaussianBlur(radius=1))
             
-            # 4. 이진화 (Thresholding)
-            # 너무 어둡게 잡지 않아 획이 붙는 현상을 방지합니다.
-            img = img.point(lambda p: 255 if p > 185 else 0)
+            # 5. 대비 강조 (Auto Contrast)
+            # 검은색은 더 검게, 흰색은 더 희게 (Threshold 아님)
+            img = ImageOps.autocontrast(img, cutoff=2)
             
-            # 5. 형태적 보정 (MinFilter: Erosion 효과)
-            # 획이 너무 두꺼워져 구멍이 메워지는 것을 방지하기 위해 획을 살짝 깎습니다.
-            img = img.filter(ImageFilter.MinFilter(3)) 
-            
-            # 6. 최종 노이즈 제거
-            img = img.filter(ImageFilter.SMOOTH)
-            
-            # Tesseract 설정 최적화: 숫자가 중요하므로 psm 6 강제
+            # 6. 이진화 임계값 완화 (Threshold 200 -> 160)
+            # 160 정도로 낮춰야 얇은 획이 날아가지 않고 살아남습니다.
+            img = img.point(lambda p: 255 if p > 160 else 0)
+
+            # Tesseract 실행
             full_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
         except Exception as e:
@@ -172,12 +174,17 @@ class OTCalculator(ctk.CTk):
                 after_text = line[match.end():]
                 nums = num_pattern.findall(after_text)
                 
-                break_val = 60 
+                break_val = 60 # Default
                 if nums:
                     val1 = int(nums[0])
-                    # 90이 20이나 60으로 오인되는 것 방지
+                    # 90이 2로 읽히는 경우에 대한 강력한 보정 로직
+                    # 보통 2, 6, 8 등으로 잘못 읽힘 -> 두번째 숫자 확인
                     if val1 < 10 and len(nums) > 1:
-                        break_val = int(nums[1])
+                        # 만약 뒤에 0이나 5가 있다면 합쳐서 생각 (예: 9 0 -> 90)
+                        if nums[1] in ['0', '5']:
+                            break_val = int(str(val1) + nums[1])
+                        else:
+                            break_val = int(nums[1])
                     else:
                         break_val = val1
                 
