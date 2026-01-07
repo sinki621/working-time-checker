@@ -11,7 +11,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import ctypes
 
-# DPI 설정
+# DPI 설정 (고해상도 대응)
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except:
@@ -32,7 +32,7 @@ class OTCalculator(ctk.CTk):
         ctk.set_appearance_mode("light")
         
         try:
-            # 한글 인식을 위해 엔진을 최대한 기본값으로 설정
+            # 별도 설정 없이도 --collect-all로 포함된 리소스를 자동 참조합니다.
             self.engine = RapidOCR()
         except Exception as e:
             messagebox.showerror("OCR Error", f"엔진 초기화 실패: {e}")
@@ -69,23 +69,18 @@ class OTCalculator(ctk.CTk):
         self.summary_box = ctk.CTkTextbox(self, height=180, font=("Segoe UI", 15))
         self.summary_box.pack(pady=15, fill="x", padx=20)
 
-    # [핵심] 한글 인식 특화 전처리 함수
-    def preprocess_for_korean(self, pil_img):
-        # 1. OpenCV 변환
+    def preprocess_image(self, pil_img):
+        # 1. OpenCV 변환 및 1.5배 확대
         img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_LANCZOS4)
         
-        # 2. 이미지 2배 확대 (한글 획 뭉침 방지)
-        img = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        
-        # 3. 그레이스케일 및 노이즈 제거
+        # 2. 그레이스케일 및 샤프닝 (글자 테두리 강조)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(gray, -1, kernel)
         
-        # 4. 적응형 이진화 (배경색이 균일하지 않아도 글자를 잘 따냄)
-        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                       cv2.THRESH_BINARY, 11, 2)
-        
-        return thresh
+        # 3. 대비 조절 (밝은 부분은 더 밝게, 어두운 글자는 더 어둡게)
+        return sharpened
 
     def load_image(self):
         f = filedialog.askopenfilename()
@@ -97,19 +92,18 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 전처리 적용
-            processed = self.preprocess_for_korean(img)
+            processed = self.preprocess_image(img)
             result, _ = self.engine(processed)
             if not result: return
 
-            # Y좌표 정렬 (확대했으므로 오차 범위를 50px로 조정)
+            # Y좌표 정렬 (확대 감안 오차 40px)
             result.sort(key=lambda x: x[0][0][1])
             lines_data = []
             if result:
                 last_y = result[0][0][0][1]
                 current_line = []
                 for res in result:
-                    if abs(res[0][0][1] - last_y) < 50:
+                    if abs(res[0][0][1] - last_y) < 40:
                         current_line.append(res)
                     else:
                         current_line.sort(key=lambda x: x[0][0][0])
@@ -130,28 +124,31 @@ class OTCalculator(ctk.CTk):
         for elements in lines_data:
             line_full = "".join(elements).replace(" ", "")
             
-            # 날짜와 시간 범위 추출
+            # 날짜(MM/DD)와 시간범위(HH:MM) 검색
             date_m = re.search(r'(\d{1,2}/\d{1,2})', line_full)
             times = re.findall(r'\d{2}:\d{2}', line_full)
             if not date_m or len(times) < 2: continue
             
             f_net = 0
-            # 뒤에서부터 단어별로 '숫자+시간/분' 패턴 정밀 탐색
+            # 1순위: 텍스트 기반 추출 (한글/영문 키워드)
             for elem in reversed(elements):
                 elem_c = elem.replace(" ", "")
-                # 한글 오인식 대응 (분 -> 준, 분 -> 문 등 유사 글자 포함)
                 h_m = re.search(r'(\d+)(?:시간|시|h|H)', elem_c)
                 m_m = re.search(r'(\d+)(?:분|준|문|m|M)', elem_c)
-                
                 if h_m or m_m:
                     f_net = (int(h_m.group(1)) if h_m else 0) * 60 + (int(m_m.group(1)) if m_m else 0)
                     if f_net > 0: break
             
-            # 최종 수단: 숫자가 8개 이상인 행에서 마지막 두 뭉치 사용
+            # 2순위: 텍스트가 뭉개졌을 경우 마지막 숫자 뭉치 두 개를 강제 추출
             if f_net == 0:
                 nums = re.findall(r'\d+', line_full)
-                if len(nums) >= 8:
-                    try: f_net = int(nums[-2]) * 60 + int(nums[-1])
+                if len(nums) >= 6: # 날짜(2) + 시간(4) 외에 숫자가 더 있을 때
+                    try:
+                        # 끝에서부터 읽어서 '분'이 60 미만인 쌍을 찾음
+                        for i in range(len(nums)-1, 4, -1):
+                            if int(nums[i]) < 60:
+                                f_net = int(nums[i-1]) * 60 + int(nums[i])
+                                break
                     except: pass
 
             if f_net > 0:
