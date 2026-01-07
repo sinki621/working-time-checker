@@ -4,7 +4,7 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
 import customtkinter as ctk
-from PIL import Image, ImageGrab, ImageTk, ImageOps
+from PIL import Image, ImageGrab, ImageTk, ImageOps, ImageEnhance
 import pytesseract
 from datetime import datetime, timedelta
 import ctypes
@@ -132,21 +132,23 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # [이미지 처리 완전 제거] 
-            # 단, Tesseract가 글자 가장자리를 인식할 공간(Padding)은 반드시 필요합니다.
+            # 1. 2배 확대 (0의 디테일을 살리기 위해 최소한의 확대만 적용)
+            w, h = img.size
+            img = img.resize((w*2, h*2), Image.Resampling.LANCZOS)
+            
+            # 2. Grayscale 및 명암 최적화
             img = ImageOps.grayscale(img)
+            img = ImageEnhance.Contrast(img).enhance(1.5) # 대비를 살짝 높여 글자와 선을 분리
+            
+            # 3. 여백 추가 (중요)
             img = ImageOps.expand(img, border=80, fill='white')
             
-            # [핵심 수정: 엔진 튜닝]
-            # --oem 1: LSTM 기반의 신경망 엔진 사용 (문맥 파악 우수)
-            # --psm 6: 단일 텍스트 블록으로 간주 (표 읽기에 최적)
-            # -c preserve_interword_spaces=1: 글자 사이의 미세한 간격 보존
-            # -c tessedit_do_invert=0: 이미지 반전 시도 안 함 (원본 품질 유지)
+            # [PSM 4 설정 적용] - 가변적인 텍스트 열 인식에 최적
+            # -c tessedit_create_txt=1: 텍스트 구조 유지 시도
             custom_config = (
-                r'--oem 1 --psm 6 '
+                r'--oem 1 --psm 4 '
                 r'-c tessedit_char_whitelist=0123456789/:- '
-                r'-c preserve_interword_spaces=1 '
-                r'-c tessedit_do_invert=0'
+                r'-c preserve_interword_spaces=1'
             )
             
             text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
@@ -155,8 +157,8 @@ class OTCalculator(ctk.CTk):
             messagebox.showerror("Error", f"인식 실패: {e}")
 
     def parse_and_fill(self, text):
+        # 정규표현식 수정: 날짜와 시간을 먼저 찾고 그 줄의 나머지에서 숫자를 찾음
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
-        num_pattern = re.compile(r'\d+')
         
         self.raw_records = []
         year = int(self.year_var.get())
@@ -167,14 +169,19 @@ class OTCalculator(ctk.CTk):
             
             try:
                 d_v, s_t, e_t = match.groups()
-                after_text = line[match.end():]
-                nums = num_pattern.findall(after_text)
+                # 날짜/시간 이후의 텍스트만 추출하여 휴게시간 검색
+                remain = line[match.end():].strip()
+                # 휴게시간은 보통 시간표시 다음에 오는 첫 번째 숫자 뭉치임
+                nums = re.findall(r'\d+', remain)
                 
-                # [보정 없이 원본 추출]
                 break_val = 60
                 if nums:
-                    # 추출된 모든 숫자를 결합 (예: '12', '0' -> '120')
-                    break_val = int("".join(nums))
+                    # 120이 12 0으로 분리되어 읽힐 경우를 대비해 첫 두 뭉치를 확인
+                    if len(nums) >= 2 and remain.find(nums[0]) + len(nums[0]) + 1 >= remain.find(nums[1]):
+                        # 매우 가까이 붙어있는 두 숫자는 하나로 합침
+                        break_val = int(nums[0] + nums[1])
+                    else:
+                        break_val = int(nums[0])
                 
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 st, et = datetime.strptime(s_t, "%H:%M"), datetime.strptime(e_t, "%H:%M")
