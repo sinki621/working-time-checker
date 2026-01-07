@@ -126,19 +126,31 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 인식률 극대화를 위한 전처리 (3배 확대 + 이진화)
+            # 1. 이미지 확대 (3배)
             w, h = img.size
             img = img.resize((w*3, h*3), Image.Resampling.LANCZOS)
-            gray = ImageOps.grayscale(img)
-            enhancer = ImageEnhance.Contrast(gray).enhance(2.5)
-            # 이진화 처리로 노이즈 제거
-            img_bin = enhancer.point(lambda p: 255 if p > 200 else 0)
-            img_final = img_bin.filter(ImageFilter.SMOOTH_MORE).filter(ImageFilter.SHARPEN)
             
-            full_text = pytesseract.image_to_string(img_final, lang='kor+eng', config='--psm 6')
+            # 2. Gray scale 변환
+            img = ImageOps.grayscale(img)
+            
+            # 3. 대비 강화 (Binary 변환 전 단계)
+            img = ImageEnhance.Contrast(img).enhance(3.0)
+            
+            # 4. Binary(이진화) 변환
+            # 특정 임계값(200)을 기준으로 흑백 분리
+            img = img.point(lambda p: 255 if p > 200 else 0)
+            
+            # 5. 형태적 변환 효과 (Dilation/Sharpen)
+            # 숫자가 끊기지 않게 약간 팽창시킨 후 날카롭게 다듬음
+            img = img.filter(ImageFilter.MaxFilter(3)) # Dilation 효과 (획 두껍게)
+            img = img.filter(ImageFilter.SHARPEN)      # 경계 뚜렷하게
+            
+            # 인식 수행 (PSM 6: 단일 텍스트 블록으로 인식하여 표 구조 유지)
+            full_text = pytesseract.image_to_string(img, lang='kor+eng', config='--psm 6')
             self.calculate_data(full_text)
+            
         except Exception as e:
-            messagebox.showerror("Error", f"이미지 분석 실패: {e}")
+            messagebox.showerror("Error", f"이미지 전처리 실패: {e}")
 
     def calculate_data(self, text):
         line_pattern = re.compile(r'(\d{1,2}/\d{1,2}).*?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})')
