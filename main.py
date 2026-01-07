@@ -41,7 +41,7 @@ class OTCalculator(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("CSV Chart Viewer - OT Calculator (Producer: KI.Shin)")
+        self.title("OT Calculator")
         self.geometry("1600x950")
         ctk.set_appearance_mode("light")
         
