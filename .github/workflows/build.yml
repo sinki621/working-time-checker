@@ -1,4 +1,4 @@
-name: Build Portable OTCalculator (Fixed Engine)
+name: Build Portable OTCalculator (Full Fix)
 
 on: 
   push:
@@ -17,95 +17,38 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install Tesseract Engine on Server
-      run: |
-        # Tesseract OCR 최신 버전 설치
-        choco install tesseract-ocr -y
+    - name: Install Tesseract Engine
+      run: choco install tesseract-ocr -y
     
-    - name: Install Python dependencies
+    - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
+        pip install customtkinter Pillow pytesseract holidays pyinstaller
     
-    - name: Prepare Engine for Bundling
+    - name: Prepare Engine Folder
       shell: pwsh
       run: |
-        # 1. Tesseract 설치 경로 확인
         $installPath = "C:\Program Files\Tesseract-OCR"
-        if (!(Test-Path $installPath)) {
-            $installPath = "C:\ProgramData\chocolatey\lib\tesseract-ocr\tools\tesseract-ocr"
-        }
-        
-        if (!(Test-Path $installPath)) {
-            Write-Error "Tesseract not found!"
-            exit 1
-        }
-        
-        Write-Host "Found Tesseract at: $installPath"
-        
-        # 2. 엔진 파일을 빌드 폴더로 복사
         New-Item -ItemType Directory -Force -Path "Tesseract-OCR"
         xcopy "$installPath\*" "Tesseract-OCR\" /E /H /Y /I
-        
-        # 3. 리포지토리의 tessdata(한글/영문 학습 데이터)로 덮어쓰기
         if (Test-Path "tessdata") {
             xcopy "tessdata\*" "Tesseract-OCR\tessdata\" /E /H /Y /I
-            Write-Host "✓ Custom tessdata injected successfully"
-        } else {
-            Write-Host "⚠ No custom tessdata found, using default"
         }
-        
-        # 4. 엔진 파일 확인
-        if (Test-Path "Tesseract-OCR\tesseract.exe") {
-            Write-Host "✓ tesseract.exe found"
-            .\Tesseract-OCR\tesseract.exe --version
-        }
-        
-        # 5. 한국어 학습 데이터 확인
-        if (Test-Path "Tesseract-OCR\tessdata\kor.traineddata") {
-            Write-Host "✓ Korean language data found"
-        } else {
-            Write-Warning "⚠ Korean language data not found!"
-        }
-    
-    - name: Build Single EXE
+
+    - name: Build EXE
       shell: pwsh
       run: |
-        # PyInstaller로 단일 실행 파일 생성
-        # --onefile: 단일 .exe 파일로 빌드
-        # --windowed: 콘솔 창 숨김 (GUI 전용)
-        # --add-data: Tesseract-OCR 폴더 및 sample.png를 리소스로 포함
-        # --name: 출력 파일명
-        
-        # sample.png 파일 존재 확인
-        if (Test-Path "sample.png") {
-            Write-Host "✓ sample.png found, including in build"
-            $sampleParam = "--add-data `"sample.png;.`""
-        } else {
-            Write-Host "⚠ sample.png not found, skipping"
-            $sampleParam = ""
-        }
-        
-        $buildCmd = "pyinstaller --noconfirm --onefile --windowed " +
-                    "--add-data `"Tesseract-OCR;Tesseract-OCR`" " +
-                    "$sampleParam " +
-                    "--name `"OTCalculator`" main.py"
-        
-        Invoke-Expression $buildCmd
-        
-        # 빌드 결과 확인
-        if (Test-Path "dist\OTCalculator.exe") {
-            $fileSize = (Get-Item "dist\OTCalculator.exe").Length / 1MB
-            Write-Host "✓ Build successful! File size: $($fileSize.ToString('F2')) MB"
-        } else {
-            Write-Error "✗ Build failed!"
-            exit 1
-        }
+        # --collect-all을 사용하여 CustomTkinter와 Holidays 라이브러리의 모든 내부 파일을 포함합니다.
+        # --windowed 옵션을 유지하되, 만약 실행이 안 된다면 이 옵션을 빼고 빌드하여 로그를 봐야 합니다.
+        pyinstaller --noconfirm --onefile --windowed `
+          --add-data "Tesseract-OCR;Tesseract-OCR" `
+          --collect-all customtkinter `
+          --collect-all holidays `
+          --hidden-import "holidays.countries.korea" `
+          --name "OTCalculator" main.py
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OTCalculator_Portable_v${{ github.run_number }}
+        name: OTCalculator_v${{ github.run_number }}
         path: dist/OTCalculator.exe
-        retention-days: 90
