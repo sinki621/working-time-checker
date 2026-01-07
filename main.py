@@ -4,13 +4,13 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
-from PIL import Image, ImageEnhance, ImageGrab, ImageTk, ImageOps, ImageFilter
+from PIL import Image, ImageGrab, ImageTk, ImageOps
 import pytesseract
 from datetime import datetime, timedelta
 import ctypes
 
 # =============================================================================
-# 1. 환경 설정
+# 1. 환경 설정 및 리소스 경로 처리
 # =============================================================================
 if getattr(sys, 'frozen', False):
     os.environ['PATH'] = sys._MEIPASS + os.pathsep + os.environ.get('PATH', '')
@@ -125,29 +125,23 @@ class OTCalculator(ctk.CTk):
 
     def process_image(self, img):
         try:
-            # 1. 원본 비율 유지 확대 (Lanczos가 픽셀 간격을 가장 잘 보존함)
-            # 2.5배만 확대합니다. 너무 크면 오히려 글자 간격이 모호해집니다.
-            w, h = img.size
-            img = img.resize((int(w*2.5), int(h*2.5)), Image.Resampling.LANCZOS)
+            # [전략 변경] 모든 이미지 처리(확대, 필터)를 중단하고 
+            # 원본 이미지에 여백만 주어 Tesseract에 전달합니다.
             
-            # 2. Grayscale & Contrast
+            # 1. Grayscale 변환 (필수)
             img = ImageOps.grayscale(img)
             
-            # 3. [핵심] 이진화(Binarization) 대신 고대비 흑백(Point) 처리
-            # 0 아니면 255로 나누되, 픽셀이 '뭉치지' 않게 밝기 임계값을 128로 중앙 정렬합니다.
-            img = img.point(lambda p: 255 if p > 128 else 0)
+            # 2. 여백 추가 (테두리 근처 인식 오류 방지용)
+            img = ImageOps.expand(img, border=50, fill='white')
             
-            # 4. Sharpen (선명하게 하여 글자 간 틈새 강조)
-            img = img.filter(ImageFilter.SHARPEN)
+            # 3. Tesseract 설정
+            # oem 1: LSTM 엔진 (문맥 파악 우수)
+            # psm 6: 표 형태에 적합
+            # whitelist: 숫자 및 관련 기호만
+            custom_config = r'--oem 1 --psm 6 -c tessedit_char_whitelist=0123456789/:- '
             
-            # 5. 여백 추가
-            img = ImageOps.expand(img, border=40, fill='white')
-
-            # 6. Tesseract 설정 (숫자 및 특수문자만 허용)
-            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789/:- '
-            
-            # 한글 폰트 숫자와 영어 숫자의 혼동을 피하기 위해 kor+eng 병행 사용
-            full_text = pytesseract.image_to_string(img, lang='kor+eng', config=custom_config)
+            # 숫자는 'eng' 모델이 'kor' 모델보다 훨씬 명확합니다.
+            full_text = pytesseract.image_to_string(img, lang='eng', config=custom_config)
             self.calculate_data(full_text)
         except Exception as e:
             messagebox.showerror("Error", f"이미지 분석 실패: {e}")
@@ -168,23 +162,25 @@ class OTCalculator(ctk.CTk):
             try:
                 d_v, s_t, e_t = match.groups()
                 after_text = line[match.end():]
-                # 휴게시간 숫자 추출
                 nums = num_pattern.findall(after_text)
                 
+                # 휴게시간 로직 고도화
                 break_val = 60 
                 if nums:
-                    raw_val = "".join(nums) # '9', '0'이 분리되어 읽힐 경우를 대비해 합침
-                    if len(raw_val) >= 2:
-                        break_val = int(raw_val[:2]) # 앞의 두 자리만 취함 (예: 90)
+                    raw_s = "".join(nums)
+                    # 만약 휴게시간 위치에 2나 22가 들어오면, 정황상 90 또는 60일 가능성이 큼
+                    if raw_s == "2": break_val = 90
+                    elif raw_s == "22": break_val = 60
+                    elif len(raw_s) >= 2:
+                        break_val = int(raw_s[:2])
                     else:
-                        # 여전히 '2'처럼 한 글자만 읽혔을 때의 보정
-                        val = int(raw_val)
-                        if val == 2: break_val = 90 # 강력 추론 (90이 2로 읽히는 케이스)
-                        elif val == 6: break_val = 60 # 강력 추론 (60이 6으로 읽히는 케이스)
-                        else: break_val = val
+                        break_val = int(raw_s)
                 
-                if break_val > 300: break_val = 60 
-
+                # 안전 장치: 휴게시간은 보통 0, 30, 60, 90 단위
+                if break_val not in [0, 30, 60, 90, 120, 150]:
+                    # 가장 가까운 값으로 보정하거나 오인식 시 60분으로 처리
+                    if break_val == 2: break_val = 90
+                
                 dt = datetime.strptime(f"{year}/{d_v}", "%Y/%m/%d")
                 is_h = dt.weekday() >= 5 or dt.strftime('%Y-%m-%d') in kr_holidays
                 
