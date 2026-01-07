@@ -403,13 +403,9 @@ class OTCalculator(ctk.CTk):
             # 두 결과를 함께 처리
             self.process_ot_data(full_text, digit_text)
             
-        except TypeError as e:
-            # 함수 호출 오류 상세 정보
-            print(f"TypeError 발생: {e}")
+        except Exception as e:
             import traceback
             traceback.print_exc()
-            raise Exception(f"함수 호출 오류: {str(e)}")
-        except Exception as e:
             raise Exception(f"Image processing failed: {str(e)}")
 
     def show_sample(self):
@@ -489,8 +485,8 @@ class OTCalculator(ctk.CTk):
             sample_img = Image.open(sample_path)
             
             # 이미지 크기 조정 (너무 크면 축소)
-            max_width = 950
-            max_height = 550
+            max_width = 1000
+            max_height = 700
             img_width, img_height = sample_img.size
             
             if img_width > max_width or img_height > max_height:
@@ -538,24 +534,103 @@ class OTCalculator(ctk.CTk):
                 f"예제 이미지를 표시할 수 없습니다:\n\n{str(e)}"
             )
 
-    def process_ot_data(self, raw_text):
-        """OCR로 추출한 텍스트를 파싱하여 초과근무 시간 계산"""
+    def process_ot_data(self, full_text, digit_text):
+        """OCR로 추출한 텍스트를 파싱하여 초과근무 시간 계산
         
-        # 정규식 패턴 개선: 휴게시간 인식 정확도 향상
-        # 60분, 60 분, 60m, 60 m, 60min 등 다양한 형식 지원
-        pattern = re.compile(
-            r'(\d{1,2}/\d{1,2}).*?'  # 날짜 (예: 12/25)
-            r'(\d{2}:\d{2})\s*[-~]\s*(\d{2}:\d{2}).*?'  # 시간 범위
-            r'(\d+)\s*(?:분|m|min|M|MIN)',  # 휴게시간 (다양한 형식)
-            re.S | re.I
-        )
-        matches = pattern.findall(raw_text)
+        Args:
+            full_text: 전체 텍스트 (한글+영어)
+            digit_text: 숫자만 추출한 텍스트
+        """
+        
+        # 전체 텍스트에서 휴게시간 관련 정보 추출 (한글/영어 구분)
+        is_korean = '분' in full_text or '시간' in full_text
+        
+        print(f"=== 언어 감지: {'한글' if is_korean else '영문'} ===\n")
+        
+        # 숫자 텍스트를 라인별로 분리
+        digit_lines = [line.strip() for line in digit_text.strip().split('\n') if line.strip()]
+        full_lines = [line.strip() for line in full_text.strip().split('\n') if line.strip()]
+        
+        # 각 라인 매칭
+        matches = []
+        
+        for i, digit_line in enumerate(digit_lines):
+            # 해당 라인의 전체 텍스트 찾기 (휴게시간 단위 확인용)
+            full_line = full_lines[i] if i < len(full_lines) else ""
+            
+            # 1. 날짜 추출: MM/DD
+            date_match = re.search(r'(\d{1,2}/\d{1,2})', digit_line)
+            if not date_match:
+                continue
+            date_val = date_match.group(1)
+            
+            # 2. 시간 추출: HH:MM-HH:MM 또는 HH:MM - HH:MM
+            time_match = re.search(r'(\d{2}:\d{2})\s*-?\s*(\d{2}:\d{2})', digit_line)
+            if not time_match:
+                continue
+            start_time = time_match.group(1)
+            end_time = time_match.group(2)
+            
+            # 3. 휴게시간 추출 (시간 이후의 숫자)
+            rest_minutes = None
+            
+            # 시간 패턴 이후의 텍스트
+            after_time = digit_line[time_match.end():]
+            
+            # 모든 2~3자리 숫자 찾기
+            rest_candidates = re.findall(r'\b(\d{2,3})\b', after_time)
+            
+            # 전체 텍스트에서 "분", "본", "min" 등의 단위 찾기
+            if is_korean:
+                # 한글: "N분" 또는 "N본" 패턴
+                rest_pattern = re.search(r'(\d{2,3})\s*[분본]', full_line)
+            else:
+                # 영문: "Nmin" 또는 "N min" 패턴
+                rest_pattern = re.search(r'(\d{2,3})\s*min', full_line, re.I)
+            
+            if rest_pattern:
+                rest_minutes = rest_pattern.group(1)
+            elif rest_candidates:
+                # 패턴 매칭 실패 시 첫 번째 숫자 사용
+                rest_minutes = rest_candidates[0]
+            else:
+                rest_minutes = "60"  # 기본값
+            
+            # 휴게시간 검증 (15~180분)
+            try:
+                rest_int = int(rest_minutes)
+                # 일반적인 휴게시간: 15, 30, 45, 60, 90, 120분
+                if rest_int < 15 or rest_int > 180:
+                    rest_minutes = "60"
+                # 30분 단위가 아니면 반올림
+                elif rest_int % 15 != 0:
+                    rest_minutes = str(round(rest_int / 15) * 15)
+            except:
+                rest_minutes = "60"
+            
+            matches.append((date_val, start_time, end_time, rest_minutes))
+            print(f"✓ 추출: {date_val} {start_time}-{end_time} 휴게 {rest_minutes}분")
+        
+        print(f"\n=== 총 {len(matches)}개 데이터 추출 ===\n")
 
         # 기존 테이블 데이터 삭제
         for item in self.tree.get_children():
             self.tree.delete(item)
         for item in self.summary_tree.get_children():
             self.summary_tree.delete(item)
+        
+        if len(matches) == 0:
+            messagebox.showwarning(
+                "No Data Found",
+                "근무 데이터를 찾을 수 없습니다.\n\n"
+                "확인사항:\n"
+                "• 날짜가 MM/DD 형식인지 확인\n"
+                "• 시간이 HH:MM-HH:MM 형식인지 확인\n"
+                "• 휴게시간이 표시되어 있는지 확인\n"
+                "• 이미지가 선명한지 확인\n\n"
+                "콘솔 창에서 OCR 결과를 확인하세요."
+            )
+            return
         
         # 변수 초기화
         selected_year = int(self.year_var.get())
@@ -564,173 +639,4 @@ class OTCalculator(ctk.CTk):
         # 일별 데이터 저장
         daily_data = []
         
-        # 각 매칭된 데이터 처리
-        for match in matches:
-            date_val, start_time, end_time, rest_minutes = match
-            
-            try:
-                # 날짜 객체 생성 (선택된 연도 사용)
-                month, day = map(int, date_val.split('/'))
-                date_obj = datetime(selected_year, month, day)
-                
-                # 공휴일 및 주말 판단
-                is_weekend = date_obj.weekday() >= 5  # 토요일(5), 일요일(6)
-                is_public_holiday = date_obj in self.kr_holidays
-                is_holiday = is_weekend or is_public_holiday
-                
-                holiday_name = self.kr_holidays.get(date_obj) if is_public_holiday else ""
-                day_name = ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
-
-                # 시간 계산
-                start = datetime.strptime(start_time, "%H:%M")
-                end = datetime.strptime(end_time, "%H:%M")
-                
-                # 종료 시간이 시작 시간보다 이른 경우 (다음날 새벽)
-                if end < start:
-                    end += timedelta(days=1)
-                
-                # 실근무 시간 = 총 근무시간 - 휴게시간
-                total_hours = (end - start).total_seconds() / 3600
-                rest_hours = float(rest_minutes) / 60
-                net_hours = total_hours - rest_hours
-                
-                # 기준시간 대비 차이 (8시간 기준)
-                diff_hours = net_hours - 8.0
-                
-                # 일별 데이터 저장
-                daily_data.append({
-                    'date': date_obj,
-                    'date_val': date_val,
-                    'day_name': day_name,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'rest_minutes': rest_minutes,
-                    'net_hours': net_hours,
-                    'diff_hours': diff_hours,
-                    'is_holiday': is_holiday,
-                    'holiday_name': holiday_name
-                })
-                
-                processed_count += 1
-                
-            except Exception as e:
-                print(f"⚠ Failed to process row: {match} - {e}")
-                continue
-        
-        # 데이터가 없는 경우
-        if processed_count == 0:
-            messagebox.showwarning(
-                "No Data Found",
-                "근무 데이터를 찾을 수 없습니다.\n\n"
-                "확인사항:\n"
-                "1. 날짜 형식: MM/DD\n"
-                "2. 시간 형식: HH:MM-HH:MM\n"
-                "3. 휴게시간: 숫자+분 (예: 60분)\n"
-                "4. 이미지가 선명한지 확인"
-            )
-            return
-        
-        # 날짜순 정렬
-        daily_data.sort(key=lambda x: x['date'])
-        
-        # 유연근무제 계산: 누적 차이 시간 추적
-        cumulative_diff = 0
-        
-        # 합계 변수
-        total_net = 0
-        total_ot_15 = 0  # 1.5배 OT
-        total_ot_20 = 0  # 2.0배 OT
-        total_ot_25 = 0  # 2.5배 OT
-        
-        # 각 일자별 계산 및 표시
-        for data in daily_data:
-            net_hours = data['net_hours']
-            diff_hours = data['diff_hours']
-            is_holiday = data['is_holiday']
-            
-            # 누적 차이 업데이트
-            cumulative_diff += diff_hours
-            
-            # 순수 OT 계산 (누적 기준)
-            if cumulative_diff > 0:
-                pure_ot = cumulative_diff
-            else:
-                pure_ot = 0
-            
-            # 배율별 OT 계산
-            ot_15 = 0  # 평일 8시간 초과
-            ot_20 = 0  # 휴일 8시간 초과
-            ot_25 = 0  # 사용 안 함
-            
-            if is_holiday:
-                # 휴일: 전체 근무시간에 1.5배 (8시간까지) + 2.0배 (초과분)
-                type_str = f"휴일({data['holiday_name'] if data['holiday_name'] else data['day_name']})"
-                if net_hours > 0:
-                    if net_hours <= 8:
-                        ot_15 = net_hours * 0.5  # 실제로는 1.5배이므로 0.5 추가
-                    else:
-                        ot_15 = 8 * 0.5
-                        ot_20 = net_hours - 8
-            else:
-                # 평일: 8시간 초과분만 1.5배
-                type_str = "평일"
-                if diff_hours > 0:
-                    ot_15 = diff_hours * 0.5
-            
-            # 환산 합계
-            weighted_total = net_hours + ot_15 + ot_20 + ot_25
-            
-            # 합계 누적
-            total_net += net_hours
-            total_ot_15 += ot_15
-            total_ot_20 += ot_20
-            total_ot_25 += ot_25
-            
-            # 기준차이 표시 (+ 또는 -)
-            if abs(diff_hours) < 0.1:
-                diff_str = "-"
-            elif diff_hours > 0:
-                diff_str = f"+{diff_hours:.1f}h"
-            else:
-                diff_str = f"{diff_hours:.1f}h"
-            
-            # 테이블에 행 추가
-            self.tree.insert("", "end", values=(
-                f"{data['date_val']}({data['day_name']})",
-                f"{data['start_time']}-{data['end_time']}",
-                f"{data['rest_minutes']}분",
-                f"{net_hours:.1f}h",
-                diff_str,
-                type_str,
-                f"{ot_15:.1f}h" if ot_15 > 0 else "-",
-                f"{ot_20:.1f}h" if ot_20 > 0 else "-",
-                f"{ot_25:.1f}h" if ot_25 > 0 else "-",
-                f"{weighted_total:.1f}h"
-            ))
-        
-        # 순수 OT 계산 (40시간 기준 주간 또는 전체 누적)
-        pure_ot_total = max(0, cumulative_diff)
-        
-        # 최종 환산 합계
-        final_weighted = total_net + total_ot_15 + total_ot_20 + total_ot_25
-        
-        # 합계 테이블 업데이트
-        self.summary_tree.insert("", "end", values=(
-            "합계",
-            f"{total_net:.1f}h",
-            f"{pure_ot_total:.1f}h",
-            f"{total_ot_15:.1f}h",
-            f"{total_ot_20:.1f}h",
-            f"{total_ot_25:.1f}h" if total_ot_25 > 0 else "-",
-            f"{final_weighted:.1f}h"
-        ), tags=('total',))
-        
-        # 합계 행 스타일 (굵게)
-        self.summary_tree.tag_configure('total', font=("Segoe UI", 11, "bold"))
-
-# =============================================================================
-# 4. 프로그램 진입점
-# =============================================================================
-if __name__ == "__main__":
-    app = OTCalculator()
-    app.mainloop()
+        #
