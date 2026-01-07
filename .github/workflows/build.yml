@@ -48,10 +48,10 @@ jobs:
           --collect-all customtkinter `
           --collect-all holidays `
           --hidden-import "holidays.countries.korea" `
-          --name "OTCalculator_KISHIN" main.py
+          --name "OTCalculator_KI.SHIN" main.py
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: CSV_Chart_Viewer_Win
-        path: dist/OTCalculator_KISHIN.exe
+        name: OT_Calculator
+        path: dist/OT_Calculator.exe
